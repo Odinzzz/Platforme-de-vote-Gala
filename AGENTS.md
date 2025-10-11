@@ -5,6 +5,9 @@
 - Core packages live under `routes/`, `models/`, `templates/`, and `static/`. Admin-specific views sit in `routes/admin_routes.py`, `templates/admin/`, and `static/js/admin_users.js`.
 - Database artifacts and schema scripts are in `data/`; automated tests reside in `tests/` with shared fixtures in `tests/conftest.py`.
 
+## Aesthetic and UI
+- For the aesthetic, we use `Bootstrap`.
+
 ## Build, Test, and Development Commands
 - `& "venv\Scripts\python.exe" run.py` — start the development server with hot reload enabled.
 - `& "venv\Scripts\python.exe" -m pytest` — execute the full test suite, covering auth and admin flows.
