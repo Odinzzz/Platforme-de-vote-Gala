@@ -8,11 +8,15 @@ main_bp = Blueprint("main", __name__)
 
 
 def _serialize_user_row(row):
+    role = None
+    if "role_nom" in row.keys():
+        role = row["role_nom"]
     return {
         "id": row["id"],
         "username": row["username"],
         "prenom": row["prenom"],
         "nom": row["nom"],
+        "role": role,
     }
 
 
@@ -107,9 +111,10 @@ def register():
 
     row = cursor.execute(
         """
-        SELECT user.id, user.username, personne.prenom, personne.nom
+        SELECT user.id, user.username, personne.prenom, personne.nom, role.nom AS role_nom
         FROM user
         JOIN personne ON user.personne_id = personne.id
+        LEFT JOIN role ON user.role_id = role.id
         WHERE user.id = ?
         """,
         (user_id,),
@@ -135,9 +140,10 @@ def login():
     cursor = conn.cursor()
     row = cursor.execute(
         """
-        SELECT user.id, user.username, user.password_hash, user.actif, personne.prenom, personne.nom
+        SELECT user.id, user.username, user.password_hash, user.actif, personne.prenom, personne.nom, role.nom AS role_nom
         FROM user
         JOIN personne ON user.personne_id = personne.id
+        LEFT JOIN role ON user.role_id = role.id
         WHERE LOWER(user.username) = LOWER(?)
         """,
         (username,),

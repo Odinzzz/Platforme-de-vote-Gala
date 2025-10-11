@@ -6,6 +6,16 @@
     const registerModalEl = document.getElementById("registerModal");
     const loginFeedback = document.getElementById("loginFeedback");
     const registerFeedback = document.getElementById("registerFeedback");
+    let currentUser = window.__currentUser__ || null;
+
+    function getAdminMenu() {
+        return document.getElementById("admin-menu");
+    }
+
+    function updateCurrentUser(user) {
+        currentUser = user;
+        window.__currentUser__ = user;
+    }
 
     function hideModal(modalEl) {
         if (!modalEl) {
@@ -18,15 +28,38 @@
         modalInstance.hide();
     }
 
+    function renderAdminMenu(user) {
+        const menu = getAdminMenu();
+        if (!menu) {
+            return;
+        }
+        const isAdmin = user && typeof user.role === "string" && user.role.toLowerCase() === "admin";
+        if (!isAdmin) {
+            menu.innerHTML = "";
+            return;
+        }
+        menu.innerHTML = [
+            '<li class="nav-item dropdown">',
+            '  <a class="nav-link dropdown-toggle" href="#" id="adminMenuToggle" role="button" data-bs-toggle="dropdown" aria-expanded="false">Admin</a>',
+            '  <ul class="dropdown-menu" aria-labelledby="adminMenuToggle">',
+            '    <li><a class="dropdown-item" href="/admin/dashboard">Tableau de bord</a></li>',
+            '    <li><a class="dropdown-item" href="/admin/users">Utilisateurs</a></li>',
+            '  </ul>',
+            '</li>'
+        ].join("");
+    }
+
     function renderAuthenticated(user) {
         if (!authArea || !user) {
             return;
         }
+        updateCurrentUser(user);
+        renderAdminMenu(user);
         const initial = (user.prenom || "").charAt(0).toUpperCase() || "?";
         authArea.innerHTML = [
             '<div class="d-flex align-items-center gap-2">',
             '  <div class="avatar-circle"><span class="initial">' + initial + '</span></div>',
-            '  <span class="fw-semibold">' + user.prenom + ' ' + user.nom + '</span>',
+            '  <span class="fw-semibold">' + (user.prenom || "") + ' ' + (user.nom || "") + '</span>',
             '  <button class="btn btn-link text-decoration-none" id="logoutButton">Deconnexion</button>',
             '</div>'
         ].join("");
@@ -37,6 +70,8 @@
         if (!authArea) {
             return;
         }
+        updateCurrentUser(null);
+        renderAdminMenu(null);
         authArea.innerHTML = [
             '<button class="btn btn-outline-primary me-2" data-bs-toggle="modal" data-bs-target="#loginModal">Connexion</button>',
             '<button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#registerModal">Inscription</button>'
@@ -132,8 +167,8 @@
         });
     }
 
-    if (window.__currentUser__) {
-        renderAuthenticated(window.__currentUser__);
+    if (currentUser) {
+        renderAuthenticated(currentUser);
     } else {
         renderUnauthenticated();
     }

@@ -48,6 +48,7 @@ def test_register_creates_member_role(client):
     assert response.status_code == 201
     data = response.get_json()
     assert data["status"] == "ok"
+    assert data["user"]["role"] == "membre"
 
     conn = db_module.get_db_connection()
     row = conn.execute(
@@ -97,6 +98,7 @@ def test_login_succeeds_with_valid_credentials(client):
     assert response.status_code == 200
     data = response.get_json()
     assert data["status"] == "ok"
+    assert data["user"]["role"] == "membre"
     assert data["user"]["username"] == "jeanmartin"
 
 

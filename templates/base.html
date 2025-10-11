@@ -11,20 +11,37 @@
     <nav class="navbar navbar-expand-lg navbar-light bg-light shadow-sm">
         <div class="container">
             <a class="navbar-brand fw-bold" href="/">Gala Distinction</a>
-
-            <div class="d-flex align-items-center" id="auth-area">
-                {% if user %}
-                    <div class="d-flex align-items-center gap-2">
-                        <div class="avatar-circle">
-                            <span class="initial">{{ user.prenom[0] | upper }}</span>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNavbar" aria-controls="mainNavbar" aria-expanded="false" aria-label="Basculer la navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="mainNavbar">
+                <ul class="navbar-nav me-auto mb-2 mb-lg-0" id="admin-menu">
+                    {% if user and user.role and user.role|lower == 'admin' %}
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="adminMenuToggle" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            Admin
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="adminMenuToggle">
+                            <li><a class="dropdown-item" href="/admin/dashboard">Tableau de bord</a></li>
+                            <li><a class="dropdown-item" href="/admin/users">Utilisateurs</a></li>
+                        </ul>
+                    </li>
+                    {% endif %}
+                </ul>
+                <div class="d-flex align-items-center ms-auto" id="auth-area">
+                    {% if user %}
+                        <div class="d-flex align-items-center gap-2">
+                            <div class="avatar-circle">
+                                <span class="initial">{{ user.prenom[0] | upper }}</span>
+                            </div>
+                            <span class="fw-semibold">{{ user.prenom }} {{ user.nom }}</span>
+                            <button class="btn btn-link text-decoration-none" id="logoutButton">Deconnexion</button>
                         </div>
-                        <span class="fw-semibold">{{ user.prenom }} {{ user.nom }}</span>
-                        <button class="btn btn-link text-decoration-none" id="logoutButton">Deconnexion</button>
-                    </div>
-                {% else %}
-                    <button class="btn btn-outline-primary me-2" data-bs-toggle="modal" data-bs-target="#loginModal">Connexion</button>
-                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#registerModal">Inscription</button>
-                {% endif %}
+                    {% else %}
+                        <button class="btn btn-outline-primary me-2" data-bs-toggle="modal" data-bs-target="#loginModal">Connexion</button>
+                        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#registerModal">Inscription</button>
+                    {% endif %}
+                </div>
             </div>
         </div>
     </nav>
@@ -38,7 +55,7 @@
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title">Connexion</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
                 </div>
                 <div class="modal-body">
                     <div class="alert alert-danger d-none" id="loginFeedback"></div>
@@ -63,7 +80,7 @@
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title">Inscription</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
                 </div>
                 <div class="modal-body">
                     <div class="alert alert-danger d-none" id="registerFeedback"></div>
