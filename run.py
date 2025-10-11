@@ -1,6 +1,7 @@
 from flask import Flask, render_template, session
 from models.init_db import init_database
 from routes.main_routes import main_bp
+from routes.admin_routes import admin_bp
 import os
 
 app = Flask(__name__)
@@ -12,6 +13,7 @@ if not os.path.exists("data/gala.db"):
 
 # Enregistre le blueprint des routes
 app.register_blueprint(main_bp)
+app.register_blueprint(admin_bp)
 
 if __name__ == "__main__":
     app.run(debug=True)

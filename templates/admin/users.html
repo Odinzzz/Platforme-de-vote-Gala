@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row g-4">
+    <div class="col-lg-7">
+        <div class="d-flex align-items-center justify-content-between mb-3">
+            <div>
+                <h1 class="h3 mb-1">Gestion des utilisateurs</h1>
+                <p class="text-muted small mb-0">Cliquez sur un utilisateur pour consulter sa fiche et ajuster ses permissions.</p>
+            </div>
+        </div>
+
+        {% set role_sections = [
+            ("admin", "Administrateurs"),
+            ("juge", "Juges"),
+            ("membre", "Membres")
+        ] %}
+
+        {% for role_slug, role_label in role_sections %}
+        <div class="card shadow-sm mb-4">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <h2 class="h5 mb-0">{{ role_label }}</h2>
+                <span class="badge bg-primary" id="count-{{ role_slug }}">0</span>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0" id="users-table-{{ role_slug }}">
+                    <thead class="table-light">
+                        <tr>
+                            <th scope="col">Nom complet</th>
+                            <th scope="col" class="text-muted">Identifiant</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr class="placeholder-row">
+                            <td colspan="2" class="text-muted small">Chargement...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="col-lg-5">
+        <div id="user-detail" class="card shadow-sm">
+            <div class="card-body">
+                <h2 class="h5">Fiche utilisateur</h2>
+                <p class="text-muted mb-0">Selectionnez un utilisateur dans la liste pour afficher ses informations.</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/admin_users.js') }}"></script>
+{% endblock %}

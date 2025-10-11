@@ -1,39 +1,7 @@
 import sqlite3
-from importlib import reload
-
-import pytest
-from flask import Flask
 from werkzeug.security import generate_password_hash
 
 from models import db as db_module
-from models import init_db as init_db_module
-
-
-@pytest.fixture
-def app(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
-    monkeypatch.setattr(init_db_module, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(init_db_module, "DB_FILE", db_path)
-
-    conn = sqlite3.connect(db_path)
-    conn.executescript(init_db_module.SCHEMA_SQL)
-    conn.close()
-
-    import routes.main_routes as main_routes
-    main_routes = reload(main_routes)
-
-    app = Flask(__name__)
-    app.config.update(SECRET_KEY="test-secret", TESTING=True)
-    app.register_blueprint(main_routes.main_bp)
-    return app
-
-
-@pytest.fixture
-def client(app):
-    return app.test_client()
-
-
 def test_register_creates_member_role(client):
     payload = {
         "prenom": "Alice",
