@@ -1,43 +1,17 @@
-import sqlite3
-
 from models import db as db_module
-
-
-def seed_roles(conn):
-    roles = {}
-    for name, description in [
-        ("admin", "Administrateur"),
-        ("juge", "Juge"),
-        ("membre", "Membre"),
-    ]:
-        roles[name] = conn.execute(
-            "INSERT INTO role (nom, description) VALUES (?, ?)",
-            (name, description),
-        ).lastrowid
-    return roles
-
-
-def create_user(conn, prenom, nom, username, role_id):
-    personne_id = conn.execute(
-        "INSERT INTO personne (prenom, nom, courriel, telephone) VALUES (?, ?, ?, ?)",
-        (prenom, nom, f"{username}@example.com", None),
-    ).lastrowid
-    user_id = conn.execute(
-        "INSERT INTO user (personne_id, username, password_hash, role_id) VALUES (?, ?, ?, ?)",
-        (personne_id, username, "hash", role_id),
-    ).lastrowid
-    return user_id
+from tests.helpers import seed_roles, create_user, set_session
 
 
 def admin_session(client, user_id, prenom="Admin", nom="Test", username="admin"):
-    with client.session_transaction() as session:
-        session["user"] = {
-            "id": user_id,
-            "username": username,
-            "prenom": prenom,
-            "nom": nom,
-            "role": "admin",
-        }
+    set_session(client, {
+        "id": user_id,
+        "username": username,
+        "prenom": prenom,
+        "nom": nom,
+        "role": "admin",
+    })
+
+
 
 
 def test_admin_user_listing_groups_by_role(client):
@@ -402,3 +376,107 @@ def test_admin_create_category_and_attach(client):
     ).fetchone()
     conn.close()
     assert row is not None
+
+
+def test_admin_lock_and_unlock_gala(client):
+    conn = db_module.get_db_connection()
+    roles = seed_roles(conn)
+    admin_id = create_user(conn, "Admin", "Chef", "adminchef", roles["admin"])
+    gala_id = conn.execute(
+        "INSERT INTO gala (nom, annee, lieu, date_gala) VALUES (?, ?, ?, ?)",
+        ("Gala a verrouiller", 2028, "Montreal", "2028-06-01"),
+    ).lastrowid
+    conn.commit()
+    conn.close()
+
+    admin_session(client, admin_id, prenom="Admin", nom="Chef", username="adminchef")
+
+    lock_resp = client.post(f"/admin/api/galas/{gala_id}/lock")
+    assert lock_resp.status_code == 200
+    lock_payload = lock_resp.get_json()
+    assert lock_payload["gala"]["locked"] is True
+    assert lock_payload["gala"].get("locked_at")
+
+    duplicate_resp = client.post(f"/admin/api/galas/{gala_id}/lock")
+    assert duplicate_resp.status_code == 409
+    duplicate_payload = duplicate_resp.get_json()
+    assert duplicate_payload["message"] == "Gala deja verrouille."
+
+    unlock_resp = client.delete(f"/admin/api/galas/{gala_id}/lock")
+    assert unlock_resp.status_code == 200
+    unlock_payload = unlock_resp.get_json()
+    assert unlock_payload["gala"]["locked"] is False
+
+    update_resp = client.patch(
+        f"/admin/api/galas/{gala_id}",
+        json={"nom": "Gala Actualise"},
+    )
+    assert update_resp.status_code == 200
+    update_payload = update_resp.get_json()
+    assert update_payload["status"] == "ok"
+    assert update_payload["gala"]["nom"] == "Gala Actualise"
+
+
+
+def test_admin_lock_prevents_mutations(client):
+    conn = db_module.get_db_connection()
+    roles = seed_roles(conn)
+    admin_id = create_user(conn, "Admin", "Chef", "adminchef", roles["admin"])
+    gala_id = conn.execute(
+        "INSERT INTO gala (nom, annee, lieu, date_gala) VALUES (?, ?, ?, ?)",
+        ("Gala Controle", 2029, "Quebec", "2029-05-15"),
+    ).lastrowid
+    cat_a = conn.execute(
+        "INSERT INTO categorie (nom, description) VALUES (?, ?)",
+        ("Innovation", ""),
+    ).lastrowid
+    cat_b = conn.execute(
+        "INSERT INTO categorie (nom, description) VALUES (?, ?)",
+        ("Croissance", ""),
+    ).lastrowid
+    gala_cat_id = conn.execute(
+        "INSERT INTO gala_categorie (gala_id, categorie_id, ordre_affichage) VALUES (?, ?, ?)",
+        (gala_id, cat_a, 1),
+    ).lastrowid
+    conn.commit()
+    conn.close()
+
+    admin_session(client, admin_id, prenom="Admin", nom="Chef", username="adminchef")
+
+    create_question_resp = client.post(
+        f"/admin/api/galas/{gala_id}/categories/{gala_cat_id}/questions",
+        json={"texte": "Qualite", "ponderation": 1},
+    )
+    assert create_question_resp.status_code == 200
+    created_questions = create_question_resp.get_json()["questions"]
+    question_id = next(q["id"] for q in created_questions if q["texte"] == "Qualite")
+
+    lock_resp = client.post(f"/admin/api/galas/{gala_id}/lock")
+    assert lock_resp.status_code == 200
+
+    update_resp = client.patch(
+        f"/admin/api/galas/{gala_id}",
+        json={"lieu": "Nouvel endroit"},
+    )
+    assert update_resp.status_code == 409
+    assert update_resp.get_json()["message"] == "Ce gala est verrouille."
+
+    add_category_resp = client.post(
+        f"/admin/api/galas/{gala_id}/categories",
+        json={"categorie_ids": [cat_b]},
+    )
+    assert add_category_resp.status_code == 409
+    assert add_category_resp.get_json()["message"] == "Ce gala est verrouille."
+
+    create_question_locked = client.post(
+        f"/admin/api/galas/{gala_id}/categories/{gala_cat_id}/questions",
+        json={"texte": "Nouvelle question", "ponderation": 2},
+    )
+    assert create_question_locked.status_code == 409
+    assert create_question_locked.get_json()["message"] == "Ce gala est verrouille."
+
+    delete_question_locked = client.delete(
+        f"/admin/api/galas/{gala_id}/categories/{gala_cat_id}/questions/{question_id}"
+    )
+    assert delete_question_locked.status_code == 409
+    assert delete_question_locked.get_json()["message"] == "Ce gala est verrouille."

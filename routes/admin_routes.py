@@ -1,3 +1,6 @@
+﻿from __future__ import annotations
+
+from datetime import datetime, UTC
 from typing import Any, Dict, List
 
 from flask import Blueprint, render_template, session, jsonify, request, abort
@@ -334,7 +337,8 @@ def galas_page():
     return render_template("admin/galas.html", user=session.get("user"))
 
 
-def _serialize_gala_row(row) -> Dict[str, Any]:
+
+def _serialize_gala_row(row, lock_row=None, submissions_count=0) -> Dict[str, Any]:
     return {
         "id": row["id"],
         "nom": row["nom"],
@@ -343,27 +347,97 @@ def _serialize_gala_row(row) -> Dict[str, Any]:
         "date_gala": row["date_gala"],
         "categories_count": row["categories_count"],
         "questions_count": row["questions_count"],
+        "locked": lock_row is not None,
+        "locked_at": lock_row["locked_at"] if lock_row else None,
+        "locked_by": lock_row["locked_by"] if lock_row else None,
+        "submissions_count": submissions_count,
     }
 
 
-@admin_bp.route("/api/galas", methods=["GET"])
-def list_galas_admin():
-    conn = get_db_connection()
+def _fetch_gala_lock_map(conn, gala_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+    if not gala_ids:
+        return {}
+    placeholders = ",".join("?" for _ in gala_ids)
     rows = conn.execute(
-        """
-        SELECT g.id, g.nom, g.annee, g.lieu, g.date_gala,
-               COUNT(DISTINCT gc.id) AS categories_count,
-               COUNT(DISTINCT q.id) AS questions_count
-        FROM gala AS g
-        LEFT JOIN gala_categorie AS gc ON gc.gala_id = g.id
-        LEFT JOIN question AS q ON q.gala_categorie_id = gc.id
-        GROUP BY g.id
-        ORDER BY g.annee DESC, g.nom COLLATE NOCASE
-        """
+        f"SELECT gala_id, locked_at, locked_by FROM gala_lock WHERE gala_id IN ({placeholders})",
+        tuple(gala_ids),
     ).fetchall()
+    return {row["gala_id"]: row for row in rows}
+
+
+def _fetch_submission_counts(conn, gala_ids: List[int]) -> Dict[int, int]:
+    if not gala_ids:
+        return {}
+    placeholders = ",".join("?" for _ in gala_ids)
+    rows = conn.execute(
+        f"SELECT gala_id, COUNT(*) AS total FROM juge_gala_submission WHERE gala_id IN ({placeholders}) GROUP BY gala_id",
+        tuple(gala_ids),
+    ).fetchall()
+    return {row["gala_id"]: row["total"] for row in rows}
+
+
+def _get_gala_lock(conn, gala_id: int):
+    return conn.execute(
+        "SELECT gala_id, locked_at, locked_by FROM gala_lock WHERE gala_id = ?",
+        (gala_id,),
+    ).fetchone()
+
+
+
+
+def _ensure_gala_unlocked(conn, gala_id: int):
+    if _get_gala_lock(conn, gala_id):
+        conn.close()
+        return jsonify({"status": "error", "message": "Ce gala est verrouille."}), 409
+    return None
+
+
+@admin_bp.route("/api/galas", methods=["GET"])
+
+def list_galas_admin():
+
+    conn = get_db_connection()
+
+    rows = conn.execute(
+
+        """
+
+        SELECT g.id, g.nom, g.annee, g.lieu, g.date_gala,
+
+               COUNT(DISTINCT gc.id) AS categories_count,
+
+               COUNT(DISTINCT q.id) AS questions_count
+
+        FROM gala AS g
+
+        LEFT JOIN gala_categorie AS gc ON gc.gala_id = g.id
+
+        LEFT JOIN question AS q ON q.gala_categorie_id = gc.id
+
+        GROUP BY g.id
+
+        ORDER BY g.annee DESC, g.nom COLLATE NOCASE
+
+        """
+
+    ).fetchall()
+
+    gala_ids = [row["id"] for row in rows]
+
+    lock_map = _fetch_gala_lock_map(conn, gala_ids)
+
+    submissions_map = _fetch_submission_counts(conn, gala_ids)
+
     conn.close()
-    payload = [_serialize_gala_row(row) for row in rows]
+
+    payload = [_serialize_gala_row(row, lock_map.get(row["id"]), submissions_map.get(row["id"], 0)) for row in rows]
+
     return jsonify({"galas": payload})
+
+
+
+
+
 
 
 @admin_bp.route("/api/galas", methods=["POST"])
@@ -459,15 +533,25 @@ def gala_detail(gala_id: int):
         (gala_id,),
     ).fetchall()
 
+    lock_row = _get_gala_lock(conn, gala_id)
+    submissions_count = conn.execute(
+        "SELECT COUNT(*) AS total FROM juge_gala_submission WHERE gala_id = ?",
+        (gala_id,),
+    ).fetchone()["total"]
     conn.close()
 
-    gala_payload = {
+    total_questions = sum((row["questions_count"] or 0) for row in categories)
+    summary_row = {
         "id": gala_row["id"],
         "nom": gala_row["nom"],
         "annee": gala_row["annee"],
         "lieu": gala_row["lieu"],
         "date_gala": gala_row["date_gala"],
+        "categories_count": len(categories),
+        "questions_count": total_questions,
     }
+    gala_payload = _serialize_gala_row(summary_row, lock_row, submissions_count)
+
     categories_payload = [
         {
             "id": row["gala_categorie_id"],
@@ -504,6 +588,11 @@ def update_gala(gala_id: int):
     if not gala_row:
         conn.close()
         abort(404)
+
+    locked_response = _ensure_gala_unlocked(conn, gala_id)
+    if locked_response:
+        return locked_response
+
 
     fields = []
     values = []
@@ -543,17 +632,115 @@ def update_gala(gala_id: int):
         )
         conn.commit()
 
-    updated_row = _fetch_gala(conn, gala_id)
+    summary_row = conn.execute(
+        """
+        SELECT g.id, g.nom, g.annee, g.lieu, g.date_gala,
+               COUNT(DISTINCT gc.id) AS categories_count,
+               COUNT(DISTINCT q.id) AS questions_count
+        FROM gala AS g
+        LEFT JOIN gala_categorie AS gc ON gc.gala_id = g.id
+        LEFT JOIN question AS q ON q.gala_categorie_id = gc.id
+        WHERE g.id = ?
+        GROUP BY g.id
+        """,
+        (gala_id,),
+    ).fetchone()
+    lock_row = _get_gala_lock(conn, gala_id)
+    submissions_count = conn.execute(
+        "SELECT COUNT(*) AS total FROM juge_gala_submission WHERE gala_id = ?",
+        (gala_id,),
+    ).fetchone()["total"]
     conn.close()
 
-    data = {
-        "id": updated_row["id"],
-        "nom": updated_row["nom"],
-        "annee": updated_row["annee"],
-        "lieu": updated_row["lieu"],
-        "date_gala": updated_row["date_gala"],
-    }
-    return jsonify({"status": "ok", "gala": data})
+    if not summary_row:
+        return jsonify({"status": "error", "message": "Gala introuvable."}), 404
+
+    payload = _serialize_gala_row(summary_row, lock_row, submissions_count)
+    return jsonify({"status": "ok", "gala": payload})
+
+
+@admin_bp.route("/api/galas/<int:gala_id>/lock", methods=["POST"])
+
+def lock_gala(gala_id: int):
+
+    conn = get_db_connection()
+
+    gala_row = _fetch_gala(conn, gala_id)
+
+    if not gala_row:
+
+        conn.close()
+
+        abort(404)
+
+
+
+    existing = _get_gala_lock(conn, gala_id)
+
+    if existing:
+
+        conn.close()
+
+        return jsonify({"status": "error", "message": "Gala deja verrouille."}), 409
+
+
+
+    locked_by = session.get("user", {}).get("id")
+
+    conn.execute(
+
+        "INSERT INTO gala_lock (gala_id, locked_at, locked_by) VALUES (?, ?, ?)",
+
+        (gala_id, datetime.now(UTC).isoformat(), locked_by),
+
+    )
+
+    conn.commit()
+
+    conn.close()
+
+    return gala_detail(gala_id)
+
+
+
+
+
+@admin_bp.route("/api/galas/<int:gala_id>/lock", methods=["DELETE"])
+
+def unlock_gala(gala_id: int):
+
+    conn = get_db_connection()
+
+    gala_row = _fetch_gala(conn, gala_id)
+
+    if not gala_row:
+
+        conn.close()
+
+        abort(404)
+
+
+
+    existing = _get_gala_lock(conn, gala_id)
+
+    if not existing:
+
+        conn.close()
+
+        return jsonify({"status": "error", "message": "Gala non verrouille."}), 409
+
+
+
+    conn.execute("DELETE FROM gala_lock WHERE gala_id = ?", (gala_id,))
+
+    conn.commit()
+
+    conn.close()
+
+    return gala_detail(gala_id)
+
+
+
 
 
 @admin_bp.route("/api/galas/<int:gala_id>/categories", methods=["POST"])
@@ -575,6 +762,11 @@ def add_categories_to_gala(gala_id: int):
     if not gala_row:
         conn.close()
         abort(404)
+
+    locked_response = _ensure_gala_unlocked(conn, gala_id)
+    if locked_response:
+        return locked_response
+
 
     placeholders = ",".join(["?"] * len(categorie_ids))
     existing = cursor.execute(
@@ -628,6 +820,11 @@ def remove_category_from_gala(gala_id: int, gala_categorie_id: int):
         conn.close()
         abort(404)
 
+    locked_response = _ensure_gala_unlocked(conn, gala_id)
+    if locked_response:
+        return locked_response
+
+
     cursor.execute(
         "DELETE FROM gala_categorie WHERE id = ?",
         (gala_categorie_id,),
@@ -654,6 +851,11 @@ def update_gala_category(gala_id: int, gala_categorie_id: int):
     if not row:
         conn.close()
         abort(404)
+
+    locked_response = _ensure_gala_unlocked(conn, gala_id)
+    if locked_response:
+        return locked_response
+
 
     fields = []
     values = []
@@ -794,6 +996,7 @@ def list_questions_for_gala_category(gala_id: int, gala_categorie_id: int):
         conn.close()
         abort(404)
 
+
     gala_cat_row = _fetch_gala_category(conn, gala_id, gala_categorie_id)
     if not gala_cat_row:
         conn.close()
@@ -844,6 +1047,11 @@ def create_question_for_gala_category(gala_id: int, gala_categorie_id: int):
         conn.close()
         abort(404)
 
+    locked_response = _ensure_gala_unlocked(conn, gala_id)
+    if locked_response:
+        return locked_response
+
+
     gala_cat_row = _fetch_gala_category(conn, gala_id, gala_categorie_id)
     if not gala_cat_row:
         conn.close()
@@ -872,6 +1080,11 @@ def update_question_for_gala_category(gala_id: int, gala_categorie_id: int, ques
     if not gala_row:
         conn.close()
         abort(404)
+
+    locked_response = _ensure_gala_unlocked(conn, gala_id)
+    if locked_response:
+        return locked_response
+
 
     gala_cat_row = _fetch_gala_category(conn, gala_id, gala_categorie_id)
     if not gala_cat_row:
@@ -926,6 +1139,11 @@ def delete_question_for_gala_category(gala_id: int, gala_categorie_id: int, ques
         conn.close()
         abort(404)
 
+    locked_response = _ensure_gala_unlocked(conn, gala_id)
+    if locked_response:
+        return locked_response
+
+
     gala_cat_row = _fetch_gala_category(conn, gala_id, gala_categorie_id)
     if not gala_cat_row:
         conn.close()
@@ -942,5 +1160,9 @@ def delete_question_for_gala_category(gala_id: int, gala_categorie_id: int, ques
     conn.close()
 
     return list_questions_for_gala_category(gala_id, gala_categorie_id)
+
+
+
+
 
 

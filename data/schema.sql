@@ -1,22 +1,9 @@
-import sqlite3
-from pathlib import Path
-
-# ==============================
-# 📂 Emplacement de la base
-# ==============================
-DATA_DIR = Path("data")
-DB_FILE = DATA_DIR / "gala.db"
-
-# ==============================
-# 🔧 Schéma complet
-# ==============================
-SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
 
 -- =========================================
 -- 🏛️ GALA & CATÉGORIES
 -- =========================================
-CREATE TABLE IF NOT EXISTS gala (
+CREATE TABLE gala (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nom TEXT NOT NULL,
     annee INTEGER NOT NULL,
@@ -24,13 +11,13 @@ CREATE TABLE IF NOT EXISTS gala (
     date_gala TEXT
 );
 
-CREATE TABLE IF NOT EXISTS categorie (
+CREATE TABLE categorie (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nom TEXT NOT NULL,
     description TEXT
 );
 
-CREATE TABLE IF NOT EXISTS gala_categorie (
+CREATE TABLE gala_categorie (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     gala_id INTEGER NOT NULL,
     categorie_id INTEGER NOT NULL,
@@ -40,7 +27,7 @@ CREATE TABLE IF NOT EXISTS gala_categorie (
     FOREIGN KEY (categorie_id) REFERENCES categorie(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS segment (
+CREATE TABLE segment (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     gala_categorie_id INTEGER NOT NULL,
     nom TEXT NOT NULL,
@@ -50,7 +37,7 @@ CREATE TABLE IF NOT EXISTS segment (
 -- =========================================
 -- 🧍 PERSONNES / UTILISATEURS / RÔLES / JUGES
 -- =========================================
-CREATE TABLE IF NOT EXISTS personne (
+CREATE TABLE personne (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     prenom TEXT NOT NULL,
     nom TEXT NOT NULL,
@@ -58,13 +45,13 @@ CREATE TABLE IF NOT EXISTS personne (
     telephone TEXT
 );
 
-CREATE TABLE IF NOT EXISTS role (
+CREATE TABLE role (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nom TEXT NOT NULL,
     description TEXT
 );
 
-CREATE TABLE IF NOT EXISTS user (
+CREATE TABLE user (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     personne_id INTEGER NOT NULL,
     username TEXT UNIQUE NOT NULL,
@@ -77,13 +64,13 @@ CREATE TABLE IF NOT EXISTS user (
     FOREIGN KEY (role_id) REFERENCES role(id) ON DELETE SET NULL
 );
 
-CREATE TABLE IF NOT EXISTS juge (
+CREATE TABLE juge (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
     FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS juge_gala_categorie (
+CREATE TABLE juge_gala_categorie (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     juge_id INTEGER NOT NULL,
     gala_categorie_id INTEGER NOT NULL,
@@ -94,7 +81,7 @@ CREATE TABLE IF NOT EXISTS juge_gala_categorie (
 -- =========================================
 -- 🏢 COMPAGNIES / PARTICIPANTS
 -- =========================================
-CREATE TABLE IF NOT EXISTS compagnie (
+CREATE TABLE compagnie (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nom TEXT NOT NULL,
     secteur TEXT,
@@ -113,7 +100,7 @@ CREATE TABLE IF NOT EXISTS compagnie (
     actif INTEGER DEFAULT 1
 );
 
-CREATE TABLE IF NOT EXISTS participant (
+CREATE TABLE participant (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     compagnie_id INTEGER NOT NULL,
     gala_categorie_id INTEGER NOT NULL,
@@ -126,7 +113,7 @@ CREATE TABLE IF NOT EXISTS participant (
 -- =========================================
 -- 📝 QUESTIONS / NOTES
 -- =========================================
-CREATE TABLE IF NOT EXISTS question (
+CREATE TABLE question (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     gala_categorie_id INTEGER NOT NULL,
     texte TEXT NOT NULL,
@@ -134,7 +121,7 @@ CREATE TABLE IF NOT EXISTS question (
     FOREIGN KEY (gala_categorie_id) REFERENCES gala_categorie(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS note (
+CREATE TABLE note (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     juge_id INTEGER NOT NULL,
     participant_id INTEGER NOT NULL,
@@ -145,7 +132,8 @@ CREATE TABLE IF NOT EXISTS note (
     FOREIGN KEY (participant_id) REFERENCES participant(id) ON DELETE CASCADE,
     FOREIGN KEY (question_id) REFERENCES question(id) ON DELETE CASCADE
 );
-CREATE TABLE IF NOT EXISTS reponse_participant (
+
+CREATE TABLE reponse_participant (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     participant_id INTEGER NOT NULL,
     question_id INTEGER NOT NULL,
@@ -155,7 +143,7 @@ CREATE TABLE IF NOT EXISTS reponse_participant (
     UNIQUE (participant_id, question_id)
 );
 
-CREATE TABLE IF NOT EXISTS gala_lock (
+CREATE TABLE gala_lock (
     gala_id INTEGER PRIMARY KEY,
     locked_at TEXT NOT NULL,
     locked_by INTEGER,
@@ -163,9 +151,9 @@ CREATE TABLE IF NOT EXISTS gala_lock (
     FOREIGN KEY (locked_by) REFERENCES user(id) ON DELETE SET NULL
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_note_unique ON note (juge_id, participant_id, question_id);
+CREATE UNIQUE INDEX idx_note_unique ON note (juge_id, participant_id, question_id);
 
-CREATE TABLE IF NOT EXISTS juge_gala_submission (
+CREATE TABLE juge_gala_submission (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     juge_id INTEGER NOT NULL,
     gala_id INTEGER NOT NULL,
@@ -174,35 +162,3 @@ CREATE TABLE IF NOT EXISTS juge_gala_submission (
     FOREIGN KEY (gala_id) REFERENCES gala(id) ON DELETE CASCADE,
     UNIQUE (juge_id, gala_id)
 );
-
-
-"""
-
-# ==============================
-# 🚀 Création automatique
-# ==============================
-def init_database() -> None:
-    """Crée la base de données SQLite pour le Gala Distinction."""
-    # S'assure que le dossier data/ existe
-    if not DATA_DIR.exists():
-        DATA_DIR.mkdir(parents=True)
-        print(f"📁 Dossier créé : {DATA_DIR.resolve()}")
-
-    # Création de la base de données
-    if DB_FILE.exists():
-        print(f"📁 Base existante : {DB_FILE.resolve()}")
-    else:
-        print("📦 Création d'une nouvelle base de données...")
-
-    conn = sqlite3.connect(DB_FILE)
-    conn.execute("PRAGMA foreign_keys = ON;")  # ⚠️ Activation obligatoire
-    conn.executescript(SCHEMA_SQL)
-    conn.commit()
-    conn.close()
-    print(f"✅ Base de données créée avec succès : {DB_FILE.resolve()}")
-
-# ==============================
-# 🧩 Point d’entrée
-# ==============================
-if __name__ == "__main__":
-    init_database()

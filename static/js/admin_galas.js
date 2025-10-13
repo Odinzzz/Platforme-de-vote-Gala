@@ -1,4 +1,4 @@
-(function () {
+﻿(function () {
     const table = document.getElementById("galasTable");
     if (!table) {
         return;
@@ -33,7 +33,30 @@
     let selectedGalaId = null;
     let selectedCategory = null; // { id, nom }
     let categoriesCache = [];
+    let currentGalaLocked = false;
     let editingQuestionId = null;
+
+    if (addQuestionModalEl) {
+        addQuestionModalEl.addEventListener('hidden.bs.modal', function () {
+            editingQuestionId = null;
+            if (confirmAddQuestionButton) {
+                confirmAddQuestionButton.textContent = 'Ajouter';
+            }
+            const modalTitle = addQuestionModalEl.querySelector('.modal-title');
+            if (modalTitle) {
+                modalTitle.textContent = 'Nouvelle question';
+            }
+            if (addQuestionForm) {
+                addQuestionForm.reset();
+                const weightField = addQuestionForm.querySelector('#questionPonderation');
+                if (weightField) {
+                    weightField.value = '1.0';
+                }
+            }
+            hideAlert(addQuestionFeedback);
+            updateQuestionContext();
+        });
+    }
 
     function escapeHtml(value) {
         if (value === null || value === undefined) {
@@ -64,6 +87,18 @@
         container.textContent = "";
     }
 
+    function getGalaStatusBadge(gala) {
+        if (gala && gala.locked) {
+            return '<span class="badge text-bg-dark">Verrouille</span>';
+        }
+        const submissions = gala && gala.submissions_count ? gala.submissions_count : 0;
+        if (submissions) {
+            return '<span class="badge text-bg-info">Soumissions: ' + submissions + '</span>';
+        }
+        return '<span class="badge text-bg-success">Actif</span>';
+    }
+
+
     function updateQuestionContext() {
         if (questionCategoryContext) {
             questionCategoryContext.textContent = selectedCategory ? 'Categorie: ' + selectedCategory.nom : 'Categorie cible';
@@ -78,7 +113,7 @@
         tableBody.innerHTML = "";
         if (!galas.length) {
             const emptyRow = document.createElement("tr");
-            emptyRow.innerHTML = '<td colspan="3" class="text-muted small">Aucun gala pour le moment.</td>';
+            emptyRow.innerHTML = '<td colspan="4" class="text-muted small">Aucun gala pour le moment.</td>';
             tableBody.appendChild(emptyRow);
             return;
         }
@@ -86,10 +121,12 @@
             const tr = document.createElement("tr");
             tr.className = "gala-row";
             tr.dataset.galaId = String(gala.id);
+            const statusBadge = getGalaStatusBadge(gala);
             tr.innerHTML = [
                 '<td>' + escapeHtml(gala.nom || "Gala") + '</td>',
                 '<td class="text-muted">' + (gala.annee || '') + '</td>',
-                '<td class="text-muted">' + (gala.categories_count || 0) + '</td>'
+                '<td class="text-muted">' + (gala.categories_count || 0) + '</td>',
+                '<td>' + statusBadge + '</td>'
             ].join("");
             tr.addEventListener("click", function () {
                 handleSelectGala(gala.id, tr);
@@ -121,7 +158,7 @@
                 }
             })
             .catch(function () {
-                tableBody.innerHTML = '<tr><td colspan="3" class="text-danger small">Impossible de charger les galas.</td></tr>';
+                tableBody.innerHTML = '<tr><td colspan="4" class="text-danger small">Impossible de charger les galas.</td></tr>';
             });
     }
 
@@ -243,59 +280,177 @@
     }
 
     function renderDetail(detail) {
-        const gala = detail.gala;
+
+        const gala = detail.gala || {};
+
         const categories = Array.isArray(detail.categories) ? detail.categories : [];
+
         categoriesCache = categories;
+
+
+
         if (selectedCategory && !categories.some(function (cat) { return Number(cat.id) === Number(selectedCategory.id); })) {
+
             selectedCategory = null;
-        }
-        if (selectedCategory) {
-            const matchedCategory = categories.find(function (cat) { return Number(cat.id) === Number(selectedCategory.id); });
-            if (matchedCategory) {
-                selectedCategory = { id: matchedCategory.id, nom: matchedCategory.nom };
-            }
-        }
-        if (!selectedCategory && categories.length) {
-            selectedCategory = {
-                id: categories[0].id,
-                nom: categories[0].nom,
-            };
+
         }
 
-        detailContainer.innerHTML = [
-            '<div class="card-body">',
-            '  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">',
-            '    <div>',
-            '      <h2 class="h4 mb-1">' + escapeHtml(gala.nom || "Gala") + '</h2>',
-            '      <p class="text-muted small mb-0">Annee ' + (gala.annee || '') + ' - ' + escapeHtml(gala.lieu || 'Lieu a definir') + '</p>',
-            '    </div>',
-            '  </div>',
-            '  <ul class="nav nav-tabs mt-4" id="galaDetailTabs" role="tablist">',
-            '    <li class="nav-item" role="presentation">',
-            '      <button class="nav-link active" id="info-tab" data-bs-toggle="tab" data-bs-target="#tabInfo" type="button" role="tab" aria-controls="tabInfo" aria-selected="true">Informations</button>',
-            '    </li>',
-            '    <li class="nav-item" role="presentation">',
-            '      <button class="nav-link" id="categories-tab" data-bs-toggle="tab" data-bs-target="#tabCategories" type="button" role="tab" aria-controls="tabCategories" aria-selected="false">Categories</button>',
-            '    </li>',
-            '    <li class="nav-item" role="presentation">',
-            '      <button class="nav-link" id="questions-tab" data-bs-toggle="tab" data-bs-target="#tabQuestions" type="button" role="tab" aria-controls="tabQuestions" aria-selected="false">Questions</button>',
-            '    </li>',
-            '  </ul>',
-            '  <div class="tab-content pt-3">',
-            '    <div class="tab-pane fade show active" id="tabInfo" role="tabpanel" aria-labelledby="info-tab">' + buildInfoTab(gala) + '</div>',
-            '    <div class="tab-pane fade" id="tabCategories" role="tabpanel" aria-labelledby="categories-tab">' + buildCategoriesTab(detail) + '</div>',
-            '    <div class="tab-pane fade" id="tabQuestions" role="tabpanel" aria-labelledby="questions-tab">' + buildQuestionsTab(categories) + '</div>',
-            '  </div>',
-            '</div>'
-        ].join("");
+        if (selectedCategory) {
+
+            const matchedCategory = categories.find(function (cat) { return Number(cat.id) === Number(selectedCategory.id); });
+
+            if (matchedCategory) {
+
+                selectedCategory = { id: matchedCategory.id, nom: matchedCategory.nom };
+
+            }
+
+        }
+
+        if (!selectedCategory && categories.length) {
+
+            selectedCategory = {
+
+                id: categories[0].id,
+
+                nom: categories[0].nom,
+
+            };
+
+        }
+
+
+
+        currentGalaLocked = Boolean(gala.locked);
+
+        const submissionsCount = gala.submissions_count || 0;
+
+        const statusBadgeClass = currentGalaLocked ? 'text-bg-dark' : submissionsCount ? 'text-bg-info' : 'text-bg-success';
+
+        const statusLabel = currentGalaLocked ? 'Verrouille' : submissionsCount ? 'Soumissions: ' + submissionsCount : 'Actif';
+
+        const lockButtonLabel = currentGalaLocked ? 'Deverrouiller le gala' : 'Verrouiller le gala';
+
+        const lockButtonClass = currentGalaLocked ? 'btn-outline-secondary' : 'btn-outline-danger';
+
+        const lockButtonState = currentGalaLocked ? 'unlock' : 'lock';
+
+        const statusMetaParts = [];
+
+        if (currentGalaLocked && gala.locked_at) {
+
+            statusMetaParts.push('Verrouille le ' + escapeHtml(gala.locked_at));
+
+        }
+
+        if (!currentGalaLocked && submissionsCount) {
+
+            statusMetaParts.push(escapeHtml(String(submissionsCount)) + ' soumissions juge');
+
+        }
+
+        const statusMetaHtml = statusMetaParts.length ? '      <p class="text-muted small mb-0">' + statusMetaParts.join(' - ') + '</p>' : '';
+
+        const lockNoticeHtml = currentGalaLocked ? '<div class="alert alert-warning small mt-3" id="galaLockNotice">Ce gala est verrouille. Les modifications sont desactivees jusqu\'a deverrouillage.</div>' : '';
+
+
+
+        const layout = [];
+
+        layout.push('<div class="card-body">');
+
+        layout.push('  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">');
+
+        layout.push('    <div>');
+
+        layout.push('      <h2 class="h4 mb-1">' + escapeHtml(gala.nom || "Gala") + '</h2>');
+
+        layout.push('      <p class="text-muted small mb-1">Annee ' + (gala.annee || '') + ' - ' + escapeHtml(gala.lieu || 'Lieu a definir') + '</p>');
+
+        if (statusMetaHtml) {
+
+            layout.push(statusMetaHtml);
+
+        }
+
+        layout.push('    </div>');
+
+        layout.push('    <div class="d-flex flex-column align-items-end gap-2">');
+
+        layout.push('      <span class="badge ' + statusBadgeClass + '">' + statusLabel + '</span>');
+
+        layout.push('      <button class="btn btn-sm ' + lockButtonClass + '" id="toggleGalaLock" data-lock="' + lockButtonState + '">' + lockButtonLabel + '</button>');
+
+        layout.push('    </div>');
+
+        layout.push('  </div>');
+
+        if (lockNoticeHtml) {
+
+            layout.push('  ' + lockNoticeHtml);
+
+        }
+
+        layout.push('  <ul class="nav nav-tabs mt-4" id="galaDetailTabs" role="tablist">');
+
+        layout.push('    <li class="nav-item" role="presentation">');
+
+        layout.push('      <button class="nav-link active" id="info-tab" data-bs-toggle="tab" data-bs-target="#tabInfo" type="button" role="tab" aria-controls="tabInfo" aria-selected="true">Informations</button>');
+
+        layout.push('    </li>');
+
+        layout.push('    <li class="nav-item" role="presentation">');
+
+        layout.push('      <button class="nav-link" id="categories-tab" data-bs-toggle="tab" data-bs-target="#tabCategories" type="button" role="tab" aria-controls="tabCategories" aria-selected="false">Categories</button>');
+
+        layout.push('    </li>');
+
+        layout.push('    <li class="nav-item" role="presentation">');
+
+        layout.push('      <button class="nav-link" id="questions-tab" data-bs-toggle="tab" data-bs-target="#tabQuestions" type="button" role="tab" aria-controls="tabQuestions" aria-selected="false">Questions</button>');
+
+        layout.push('    </li>');
+
+        layout.push('  </ul>');
+
+        layout.push('  <div class="tab-content pt-3">');
+
+        layout.push('    <div class="tab-pane fade show active" id="tabInfo" role="tabpanel" aria-labelledby="info-tab">' + buildInfoTab(gala) + '</div>');
+
+        layout.push('    <div class="tab-pane fade" id="tabCategories" role="tabpanel" aria-labelledby="categories-tab">' + buildCategoriesTab(detail) + '</div>');
+
+        layout.push('    <div class="tab-pane fade" id="tabQuestions" role="tabpanel" aria-labelledby="questions-tab">' + buildQuestionsTab(categories) + '</div>');
+
+        layout.push('  </div>');
+
+        layout.push('</div>');
+
+
+
+        detailContainer.innerHTML = layout.join("");
+
+
 
         bindInfoForm(gala.id);
+
         bindCategoryActions(detail);
+
         bindQuestionActions(categories);
+
+        bindLockControls(detail);
+
+        applyLockState(currentGalaLocked);
+
         if (selectedCategory) {
+
             loadQuestions(selectedCategory.id);
+
         }
+
     }
+
+
+
 
 
     function bindInfoForm(galaId) {
@@ -303,6 +458,13 @@
         const form = document.getElementById("galaInfoForm");
         const feedback = document.getElementById("galaInfoFeedback");
         if (!saveButton || !form) {
+            return;
+        }
+        if (currentGalaLocked) {
+            saveButton.disabled = true;
+            form.querySelectorAll('input, textarea, select').forEach(function (input) {
+                input.disabled = true;
+            });
             return;
         }
         saveButton.addEventListener("click", function () {
@@ -345,6 +507,12 @@
         const button = document.getElementById("openAddCategory");
         if (button) {
             button.addEventListener("click", function () {
+                if (currentGalaLocked) {
+                    if (addCategoryFeedback) {
+                        showAlert(addCategoryFeedback, 'error', 'Ce gala est verrouille.');
+                    }
+                    return;
+                }
                 renderAvailableCategories(detail.available_categories || []);
                 hideAlert(addCategoryFeedback);
                 if (createCategoryForm) {
@@ -379,7 +547,9 @@
                     loadQuestions(galaCategorieId);
                 });
             });
+            applyLockState(currentGalaLocked);
         }
+
     }
 
 
@@ -401,7 +571,7 @@
         const addButton = document.getElementById("openAddQuestion");
         if (addButton) {
             addButton.addEventListener("click", function () {
-                if (!selectedCategory) {
+                if (!selectedCategory || currentGalaLocked) {
                     return;
                 }
                 editingQuestionId = null;
@@ -420,29 +590,7 @@
                 if (modalTitle) {
                     modalTitle.textContent = 'Nouvelle question';
                 }
-                if (addQuestionModalEl) {
-        addQuestionModalEl.addEventListener('hidden.bs.modal', function () {
-            editingQuestionId = null;
-            if (confirmAddQuestionButton) {
-                confirmAddQuestionButton.textContent = 'Ajouter';
-            }
-            const modalTitle = addQuestionModalEl.querySelector('.modal-title');
-            if (modalTitle) {
-                modalTitle.textContent = 'Nouvelle question';
-            }
-            if (addQuestionForm) {
-                addQuestionForm.reset();
-                const weightField = addQuestionForm.querySelector('#questionPonderation');
-                if (weightField) {
-                    weightField.value = '1.0';
-                }
-            }
-            hideAlert(addQuestionFeedback);
-            updateQuestionContext();
-        });
-    }
-
-    if (confirmAddQuestionButton) {
+                if (confirmAddQuestionButton) {
                     confirmAddQuestionButton.textContent = 'Ajouter';
                 }
                 updateQuestionContext();
@@ -550,6 +698,7 @@
                 const questions = Array.isArray(payload.questions) ? payload.questions : [];
                 if (!questions.length) {
                     list.innerHTML = '<p class="text-muted small mb-0">Aucune question pour cette categorie.</p>';
+                    applyLockState(currentGalaLocked);
                     return;
                 }
                 const items = questions.map(function (question) {
@@ -613,6 +762,7 @@
                         deleteQuestion(questionId, button);
                     });
                 });
+                applyLockState(currentGalaLocked);
             })
             .catch(function (error) {
                 const list = document.getElementById("galaQuestionsList");
@@ -624,7 +774,7 @@
 
 
     function deleteQuestion(questionId, triggerButton) {
-        if (!selectedGalaId || !selectedCategory) {
+        if (!selectedGalaId || !selectedCategory || currentGalaLocked) {
             return;
         }
         if (typeof window !== 'undefined' && !window.confirm('Voulez-vous supprimer cette question ?')) {
@@ -677,6 +827,89 @@
                 }
             });
     }
+
+    function bindLockControls(detail) {
+        const button = document.getElementById("toggleGalaLock");
+        if (!button) {
+            return;
+        }
+        button.addEventListener('click', function () {
+            if (!selectedGalaId) {
+                return;
+            }
+            const action = button.getAttribute('data-lock');
+            const wantLock = action === 'lock';
+            button.disabled = true;
+            const feedback = document.getElementById('galaInfoFeedback');
+            if (feedback) {
+                hideAlert(feedback);
+            }
+            fetch('/admin/api/galas/' + selectedGalaId + '/lock', {
+                method: wantLock ? 'POST' : 'DELETE'
+            })
+                .then(function (response) {
+                    return response.json().then(function (data) {
+                        return { ok: response.ok, data: data };
+                    });
+                })
+                .then(function (result) {
+                    if (!result.ok) {
+                        throw new Error(result.data && result.data.message ? result.data.message : 'Action impossible.');
+                    }
+                    if (feedback) {
+                        showAlert(feedback, 'success', wantLock ? 'Gala verrouille.' : 'Gala deverrouille.');
+                    }
+                    loadGalaDetail(selectedGalaId);
+                    fetchGalas({ retainSelection: true });
+                })
+                .catch(function (error) {
+                    if (feedback) {
+                        showAlert(feedback, 'error', error.message || 'Action impossible.');
+                    }
+                })
+                .finally(function () {
+                    button.disabled = false;
+                });
+        });
+    }
+
+
+    function applyLockState(isLocked) {
+        const infoForm = document.getElementById('galaInfoForm');
+        if (infoForm) {
+            infoForm.querySelectorAll('input, textarea, select').forEach(function (input) {
+                input.disabled = Boolean(isLocked);
+            });
+        }
+        const saveButton = document.getElementById('saveGalaInfo');
+        if (saveButton) {
+            saveButton.disabled = Boolean(isLocked);
+        }
+        const addCategoryButton = document.getElementById('openAddCategory');
+        if (addCategoryButton) {
+            addCategoryButton.disabled = Boolean(isLocked);
+        }
+        if (createCategoryButton) {
+            createCategoryButton.disabled = Boolean(isLocked);
+        }
+        if (confirmAddCategoriesButton) {
+            confirmAddCategoriesButton.disabled = Boolean(isLocked);
+        }
+        const addQuestionButton = document.getElementById('openAddQuestion');
+        if (addQuestionButton) {
+            addQuestionButton.disabled = Boolean(isLocked);
+        }
+        if (confirmAddQuestionButton) {
+            confirmAddQuestionButton.disabled = Boolean(isLocked);
+        }
+        document.querySelectorAll('[data-action="remove-categorie"]').forEach(function (btn) {
+            btn.disabled = Boolean(isLocked);
+        });
+        document.querySelectorAll('[data-action="edit-question"], [data-action="delete-question"]').forEach(function (btn) {
+            btn.disabled = Boolean(isLocked);
+        });
+    }
+
 
     function handleCreateGala() {
         if (!createForm) {
@@ -917,3 +1150,4 @@
 
     fetchGalas();
 })();
+

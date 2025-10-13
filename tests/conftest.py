@@ -23,12 +23,15 @@ def app(tmp_path, monkeypatch):
     main_routes = reload(main_routes)
     import routes.admin_routes as admin_routes
     admin_routes = reload(admin_routes)
+    import routes.judge_routes as judge_routes
+    judge_routes = reload(judge_routes)
 
     test_app = Flask(__name__)
     test_app.config.update(SECRET_KEY="test-secret", TESTING=True)
 
     test_app.register_blueprint(main_routes.main_bp)
     test_app.register_blueprint(admin_routes.admin_bp)
+    test_app.register_blueprint(judge_routes.judge_bp)
 
     return test_app
 

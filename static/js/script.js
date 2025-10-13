@@ -1,4 +1,16 @@
 (function () {
+    function escapeHtml(value) {
+        if (value === null || value === undefined) {
+            return "";
+        }
+        return String(value)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll("\"", "&quot;")
+            .replaceAll("'", "&#39;");
+    }
+
     const authArea = document.getElementById("auth-area");
     const loginForm = document.getElementById("loginForm");
     const registerForm = document.getElementById("registerForm");
@@ -10,6 +22,10 @@
 
     function getAdminMenu() {
         return document.getElementById("admin-menu");
+    }
+
+    function getJudgeMenu() {
+        return document.getElementById("judge-menu");
     }
 
     function updateCurrentUser(user) {
@@ -26,6 +42,67 @@
             modalInstance = new bootstrap.Modal(modalEl);
         }
         modalInstance.hide();
+    }
+
+    async function renderJudgeMenu(user) {
+        const menu = getJudgeMenu();
+        if (!menu) {
+            return;
+        }
+        const isJudge = user && typeof user.role === "string" && user.role.toLowerCase() === "juge";
+        if (!isJudge) {
+            menu.innerHTML = "";
+            return;
+        }
+        menu.innerHTML = [
+            '<li class="nav-item dropdown">',
+            '  <a class="nav-link dropdown-toggle" href="#" id="judgeMenuToggle" role="button" data-bs-toggle="dropdown" aria-expanded="false">Juge</a>',
+            '  <ul class="dropdown-menu" aria-labelledby="judgeMenuToggle">',
+            '    <li><span class="dropdown-item-text text-muted small">Chargement...</span></li>',
+            '  </ul>',
+            '</li>'
+        ].join("");
+        try {
+            const response = await fetch('/judge/api/galas');
+            if (!response.ok) {
+                throw new Error('Erreur de chargement');
+            }
+            const payload = await response.json();
+            const galas = Array.isArray(payload.galas) ? payload.galas : [];
+            if (!galas.length) {
+                menu.innerHTML = '<li class="nav-item"><span class="nav-link disabled text-muted">Aucun gala</span></li>';
+                return;
+            }
+            const items = galas.map(function (gala) {
+                const label = (gala.annee ? gala.annee + ' - ' : '') + escapeHtml(gala.nom || 'Gala');
+                let badgeClass = 'text-bg-secondary';
+                let badgeLabel = gala.status || '';
+                const status = (gala.status || '').toLowerCase();
+                if (status === 'termine') {
+                    badgeClass = 'text-bg-success';
+                } else if (status === 'en_cours') {
+                    badgeClass = 'text-bg-primary';
+                } else if (status === 'soumis') {
+                    badgeClass = 'text-bg-info';
+                } else if (status === 'verrouille') {
+                    badgeClass = 'text-bg-dark';
+                } else if (status === 'en_attente') {
+                    badgeClass = 'text-bg-warning';
+                }
+                const badge = badgeLabel ? '<span class="badge ' + badgeClass + ' ms-2 text-uppercase">' + escapeHtml(badgeLabel) + '</span>' : '';
+                return '<li><a class="dropdown-item d-flex justify-content-between align-items-center" href="/judge/galas/' + gala.id + '">' + label + badge + '</a></li>';
+            }).join('');
+            menu.innerHTML = [
+                '<li class="nav-item dropdown">',
+                '  <a class="nav-link dropdown-toggle" href="#" id="judgeMenuToggle" role="button" data-bs-toggle="dropdown" aria-expanded="false">Juge</a>',
+                '  <ul class="dropdown-menu" aria-labelledby="judgeMenuToggle">',
+                items,
+                '  </ul>',
+                '</li>'
+            ].join("");
+        } catch (error) {
+            menu.innerHTML = '<li class="nav-item"><span class="nav-link disabled text-danger">Erreur juge</span></li>';
+        }
     }
 
     function renderAdminMenu(user) {
@@ -56,6 +133,7 @@
         }
         updateCurrentUser(user);
         renderAdminMenu(user);
+        renderJudgeMenu(user);
         const initial = (user.prenom || "").charAt(0).toUpperCase() || "?";
         authArea.innerHTML = [
             '<div class="d-flex align-items-center gap-2">',
@@ -73,6 +151,7 @@
         }
         updateCurrentUser(null);
         renderAdminMenu(null);
+        renderJudgeMenu(null);
         authArea.innerHTML = [
             '<button class="btn btn-outline-primary me-2" data-bs-toggle="modal" data-bs-target="#loginModal">Connexion</button>',
             '<button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#registerModal">Inscription</button>'

@@ -1,0 +1,20 @@
+﻿{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex flex-column flex-lg-row align-items-lg-center justify-content-lg-between gap-3 mb-4">
+    <div>
+        <h1 class="h3 mb-1" id="judgeGalaTitle">Espace juge</h1>
+        <p class="text-muted mb-0" id="judgeGalaSubtitle"></p>
+    </div>
+    <div class="d-flex align-items-center gap-3">
+        <span class="badge text-bg-secondary" id="judgeGalaStatusBadge"></span>
+        <button class="btn btn-success d-none" id="judgeSubmitButton">Soumettre mes evaluations</button>
+    </div>
+</div>
+<div id="judgeFeedback" class="alert d-none" role="alert"></div>
+<div id="judgeDashboardRoot" data-gala-id="{{ gala_id }}" data-category-id="{{ category_id or '' }}" data-participant-id="{{ participant_id or '' }}"></div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/judge_dashboard.js') }}"></script>
+{% endblock %}
