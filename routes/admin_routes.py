@@ -1,7 +1,7 @@
 ﻿from __future__ import annotations
 
 from datetime import datetime, UTC
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from flask import Blueprint, render_template, session, jsonify, request, abort
 
@@ -26,6 +26,11 @@ def ensure_admin() -> None:
 @admin_bp.route("/users", methods=["GET"])
 def users_page():
     return render_template("admin/users.html", user=session.get("user"))
+
+
+@admin_bp.route("/participants", methods=["GET"])
+def participants_page():
+    return render_template("admin/participants.html", user=session.get("user"))
 
 
 @admin_bp.route("/api/users", methods=["GET"])
@@ -1161,6 +1166,374 @@ def delete_question_for_gala_category(gala_id: int, gala_categorie_id: int, ques
 
     return list_questions_for_gala_category(gala_id, gala_categorie_id)
 
+
+
+# ==============================
+# Admin Participant management
+# ==============================
+def _fetch_narratif_gala_categories(conn) -> Dict[int, List[int]]:
+    rows = conn.execute(
+        """
+        SELECT gc.id AS gala_categorie_id, gc.gala_id
+        FROM gala_categorie AS gc
+        JOIN categorie AS c ON c.id = gc.categorie_id
+        WHERE LOWER(c.nom) LIKE 'narratif%'
+        """
+    ).fetchall()
+
+    mapping: Dict[int, List[int]] = {}
+    for row in rows:
+        mapping.setdefault(row["gala_id"], []).append(row["gala_categorie_id"])
+    return mapping
+
+
+def _build_admin_participant_filters(conn) -> List[Dict[str, Any]]:
+    gala_rows = conn.execute(
+        """
+        SELECT
+            g.id,
+            g.nom,
+            g.annee,
+            COUNT(DISTINCT gc.id) AS categories_count,
+            COUNT(DISTINCT p.id) AS participants_count
+        FROM gala AS g
+        LEFT JOIN gala_categorie AS gc ON gc.gala_id = g.id
+        LEFT JOIN participant AS p ON p.gala_categorie_id = gc.id
+        GROUP BY g.id
+        ORDER BY g.annee DESC, g.nom COLLATE NOCASE
+        """
+    ).fetchall()
+
+    gala_map: Dict[int, Dict[str, Any]] = {}
+    for row in gala_rows:
+        gala_map[row["id"]] = {
+            "id": row["id"],
+            "nom": row["nom"],
+            "annee": row["annee"],
+            "categories_count": row["categories_count"],
+            "participants_count": row["participants_count"],
+            "categories": [],
+        }
+
+    if not gala_map:
+        return []
+
+    gala_ids = tuple(gala_map.keys())
+    placeholders = ",".join("?" for _ in gala_ids)
+    narratif_map = _fetch_narratif_gala_categories(conn)
+    narratif_ids = {cat_id for values in narratif_map.values() for cat_id in values}
+
+    category_rows = conn.execute(
+        f"""
+        SELECT
+            gc.id,
+            gc.gala_id,
+            c.nom AS categorie_nom,
+            COUNT(DISTINCT p.id) AS participants_count
+        FROM gala_categorie AS gc
+        JOIN categorie AS c ON c.id = gc.categorie_id
+        LEFT JOIN participant AS p ON p.gala_categorie_id = gc.id
+        WHERE gc.gala_id IN ({placeholders})
+        GROUP BY gc.id, gc.gala_id
+        ORDER BY c.nom COLLATE NOCASE
+        """,
+        gala_ids,
+    ).fetchall()
+
+    for row in category_rows:
+        gala_entry = gala_map.get(row["gala_id"])
+        if not gala_entry:
+            continue
+        if row["id"] in narratif_ids:
+            continue
+        gala_entry["categories"].append(
+            {
+                "id": row["id"],
+                "nom": row["categorie_nom"],
+                "participants_count": row["participants_count"],
+            }
+        )
+
+    for gala_entry in gala_map.values():
+        gala_entry["categories"].sort(key=lambda item: item["nom"].lower())
+        gala_entry["categories_count"] = len(gala_entry["categories"])
+        gala_entry["participants_count"] = sum(cat["participants_count"] for cat in gala_entry["categories"])
+
+    return list(gala_map.values())
+
+
+def _fetch_questions_by_category(conn, category_ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
+    if not category_ids:
+        return {}
+
+    unique_ids = sorted(set(category_ids))
+    placeholders = ",".join("?" for _ in unique_ids)
+    rows = conn.execute(
+        f"""
+        SELECT id, gala_categorie_id, texte, ponderation
+        FROM question
+        WHERE gala_categorie_id IN ({placeholders})
+        ORDER BY id ASC
+        """,
+        tuple(unique_ids),
+    ).fetchall()
+
+    question_map: Dict[int, List[Dict[str, Any]]] = {}
+    for row in rows:
+        bucket = question_map.setdefault(row["gala_categorie_id"], [])
+        bucket.append(
+            {
+                "id": row["id"],
+                "texte": row["texte"],
+                "ponderation": row["ponderation"],
+            }
+        )
+
+    for bucket in question_map.values():
+        for index, question in enumerate(bucket, start=1):
+            question["ordre"] = index
+
+    return question_map
+
+
+def _fetch_responses_by_participant(conn, participant_ids: List[int]) -> Dict[int, Dict[int, Optional[str]]]:
+    if not participant_ids:
+        return {}
+
+    unique_ids = sorted(set(participant_ids))
+    placeholders = ",".join("?" for _ in unique_ids)
+    rows = conn.execute(
+        f"""
+        SELECT participant_id, question_id, contenu
+        FROM reponse_participant
+        WHERE participant_id IN ({placeholders})
+        """,
+        tuple(unique_ids),
+    ).fetchall()
+
+    responses: Dict[int, Dict[int, Optional[str]]] = {}
+    for row in rows:
+        participant_bucket = responses.setdefault(row["participant_id"], {})
+        participant_bucket[row["question_id"]] = row["contenu"]
+    return responses
+
+
+@admin_bp.route("/api/participants", methods=["GET"])
+def list_admin_participants():
+    gala_id = request.args.get("gala_id", type=int)
+    categorie_id = request.args.get("categorie_id", type=int)
+    search = (request.args.get("q") or "").strip()
+
+    conn = get_db_connection()
+    filters_payload = _build_admin_participant_filters(conn)
+    narratif_by_gala = _fetch_narratif_gala_categories(conn)
+    narratif_ids_set = {cat_id for values in narratif_by_gala.values() for cat_id in values}
+
+    base_query = """
+        SELECT
+            p.id AS participant_id,
+            p.segment_id,
+            comp.id AS compagnie_id,
+            comp.nom AS compagnie_nom,
+            comp.secteur,
+            comp.ville,
+            comp.telephone,
+            comp.courriel,
+            comp.responsable_nom,
+            comp.responsable_titre,
+            comp.site_web,
+            gc.id AS gala_categorie_id,
+            cat.nom AS categorie_nom,
+            g.id AS gala_id,
+            g.nom AS gala_nom,
+            g.annee AS gala_annee,
+            seg.nom AS segment_nom
+        FROM participant AS p
+        JOIN compagnie AS comp ON comp.id = p.compagnie_id
+        JOIN gala_categorie AS gc ON gc.id = p.gala_categorie_id
+        JOIN categorie AS cat ON cat.id = gc.categorie_id
+        JOIN gala AS g ON g.id = gc.gala_id
+        LEFT JOIN segment AS seg ON seg.id = p.segment_id
+    """
+
+    clauses: List[str] = []
+    params: List[Any] = []
+
+    if gala_id:
+        clauses.append("g.id = ?")
+        params.append(gala_id)
+
+    if categorie_id:
+        clauses.append("gc.id = ?")
+        params.append(categorie_id)
+
+    if search:
+        like_pattern = f"%{search}%"
+        clauses.append(
+            "("
+            "comp.nom LIKE ? OR "
+            "comp.courriel LIKE ? OR "
+            "comp.ville LIKE ? OR "
+            "comp.responsable_nom LIKE ? OR "
+            "comp.responsable_titre LIKE ? OR "
+            "comp.secteur LIKE ?"
+            ")"
+        )
+        params.extend([like_pattern] * 6)
+
+    if not categorie_id or categorie_id not in narratif_ids_set:
+        clauses.append("LOWER(cat.nom) NOT LIKE 'narratif%'")
+
+    where_clause = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    order_clause = " ORDER BY g.annee DESC, cat.nom COLLATE NOCASE, comp.nom COLLATE NOCASE"
+
+    participant_rows = conn.execute(
+        base_query + where_clause + order_clause,
+        tuple(params),
+    ).fetchall()
+
+    participant_ids = [row["participant_id"] for row in participant_rows]
+    category_ids = [row["gala_categorie_id"] for row in participant_rows]
+
+    relevant_gala_ids = {row["gala_id"] for row in participant_rows}
+    relevant_narratif_ids = sorted(
+        {cat_id for gala in relevant_gala_ids for cat_id in narratif_by_gala.get(gala, [])}
+    )
+
+    narratif_participant_map: Dict[tuple[int, int], Dict[str, int]] = {}
+    narrative_participant_ids: List[int] = []
+
+    if relevant_narratif_ids:
+        placeholders = ",".join("?" for _ in relevant_narratif_ids)
+        narratif_rows = conn.execute(
+            f"""
+            SELECT
+                p.id AS participant_id,
+                p.compagnie_id,
+                gc.gala_id,
+                gc.id AS gala_categorie_id
+            FROM participant AS p
+            JOIN gala_categorie AS gc ON gc.id = p.gala_categorie_id
+            WHERE p.gala_categorie_id IN ({placeholders})
+            """,
+            tuple(relevant_narratif_ids),
+        ).fetchall()
+
+        for row in narratif_rows:
+            key = (row["gala_id"], row["compagnie_id"])
+            narratif_participant_map[key] = {
+                "participant_id": row["participant_id"],
+                "gala_categorie_id": row["gala_categorie_id"],
+            }
+            narrative_participant_ids.append(row["participant_id"])
+
+        category_ids.extend(relevant_narratif_ids)
+
+    all_participant_ids = participant_ids + narrative_participant_ids
+
+    questions_map = _fetch_questions_by_category(conn, category_ids)
+    responses_map = _fetch_responses_by_participant(conn, all_participant_ids)
+
+    participants_payload: List[Dict[str, Any]] = []
+    for row in participant_rows:
+        participant_id = row["participant_id"]
+        gala_categorie_id = row["gala_categorie_id"]
+        questions = questions_map.get(gala_categorie_id, [])
+        participant_responses = responses_map.get(participant_id, {})
+
+        responses_payload: List[Dict[str, Any]] = []
+        answered_count = 0
+        for question in questions:
+            answer_text = participant_responses.get(question["id"])
+            if answer_text is not None and str(answer_text).strip():
+                answered_count += 1
+            responses_payload.append(
+                {
+                    "question_id": question["id"],
+                    "ordre": question["ordre"],
+                    "texte": question["texte"],
+                    "ponderation": question["ponderation"],
+                    "contenu": answer_text,
+                }
+            )
+
+        narratif_info = narratif_participant_map.get((row["gala_id"], row["compagnie_id"]))
+        if narratif_info:
+            narratif_questions = questions_map.get(narratif_info["gala_categorie_id"], [])
+            narratif_responses = responses_map.get(narratif_info["participant_id"], {})
+            for question in narratif_questions:
+                answer_text = narratif_responses.get(question["id"])
+                if answer_text is None:
+                    continue
+                if not str(answer_text).strip():
+                    continue
+                responses_payload.append(
+                    {
+                        "question_id": question["id"],
+                        "ordre": question["ordre"],
+                        "texte": question["texte"],
+                        "ponderation": question["ponderation"],
+                        "contenu": answer_text,
+                        "origin": "narratif",
+                    }
+                )
+
+        total_questions = len(questions)
+        completion_percent = round((answered_count / total_questions) * 100, 1) if total_questions else 0.0
+
+        participants_payload.append(
+            {
+                "id": participant_id,
+                "gala": {
+                    "id": row["gala_id"],
+                    "nom": row["gala_nom"],
+                    "annee": row["gala_annee"],
+                },
+                "categorie": {
+                    "id": gala_categorie_id,
+                    "nom": row["categorie_nom"],
+                    "segment": row["segment_nom"],
+                    "segment_id": row["segment_id"],
+                },
+                "compagnie": {
+                    "id": row["compagnie_id"],
+                    "nom": row["compagnie_nom"],
+                    "ville": row["ville"],
+                    "secteur": row["secteur"],
+                    "telephone": row["telephone"],
+                    "courriel": row["courriel"],
+                    "responsable_nom": row["responsable_nom"],
+                    "responsable_titre": row["responsable_titre"],
+                    "site_web": row["site_web"],
+                },
+                "responses": responses_payload,
+                "stats": {
+                    "answered": answered_count,
+                    "total_questions": total_questions,
+                    "missing": max(total_questions - answered_count, 0),
+                    "completion_percent": completion_percent,
+                },
+            }
+        )
+
+    conn.close()
+
+    return jsonify(
+        {
+            "filters": {
+                "galas": filters_payload,
+                "selected": {
+                    "gala_id": gala_id,
+                    "categorie_id": categorie_id,
+                    "q": search or None,
+                },
+            },
+            "participants": participants_payload,
+            "meta": {
+                "total": len(participants_payload),
+            },
+        }
+    )
 
 
 

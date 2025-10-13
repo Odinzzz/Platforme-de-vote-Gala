@@ -480,3 +480,160 @@ def test_admin_lock_prevents_mutations(client):
     )
     assert delete_question_locked.status_code == 409
     assert delete_question_locked.get_json()["message"] == "Ce gala est verrouille."
+
+
+def test_admin_participants_api_returns_responses_and_filters(client):
+    conn = db_module.get_db_connection()
+    roles = seed_roles(conn)
+    admin_id = create_user(conn, "Admin", "Chef", "adminchef", roles["admin"])
+
+    gala_id = conn.execute(
+        "INSERT INTO gala (nom, annee, lieu, date_gala) VALUES (?, ?, ?, ?)",
+        ("Gala Distinction", 2026, "Quebec", "2026-05-15"),
+    ).lastrowid
+    categorie_innov = conn.execute(
+        "INSERT INTO categorie (nom, description) VALUES (?, ?)",
+        ("Innovation", ""),
+    ).lastrowid
+    categorie_croissance = conn.execute(
+        "INSERT INTO categorie (nom, description) VALUES (?, ?)",
+        ("Croissance", ""),
+    ).lastrowid
+    categorie_narratif = conn.execute(
+        "INSERT INTO categorie (nom, description) VALUES (?, ?)",
+        ("Narratif (general)", ""),
+    ).lastrowid
+    gala_cat_innov = conn.execute(
+        "INSERT INTO gala_categorie (gala_id, categorie_id, ordre_affichage) VALUES (?, ?, ?)",
+        (gala_id, categorie_innov, 1),
+    ).lastrowid
+    gala_cat_narratif = conn.execute(
+        "INSERT INTO gala_categorie (gala_id, categorie_id, ordre_affichage) VALUES (?, ?, ?)",
+        (gala_id, categorie_narratif, 0),
+    ).lastrowid
+    gala_cat_croissance = conn.execute(
+        "INSERT INTO gala_categorie (gala_id, categorie_id, ordre_affichage) VALUES (?, ?, ?)",
+        (gala_id, categorie_croissance, 2),
+    ).lastrowid
+    segment_id = conn.execute(
+        "INSERT INTO segment (gala_categorie_id, nom) VALUES (?, ?)",
+        (gala_cat_innov, "PME"),
+    ).lastrowid
+
+    compagnie_alpha = conn.execute(
+        """
+        INSERT INTO compagnie (nom, secteur, ville, courriel, telephone, responsable_nom, responsable_titre, site_web)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("Alpha Inc.", "Technologie", "Quebec", "alpha@example.com", "111-111-1111", "Alice Alpha", "PDG", "alpha.example.com"),
+    ).lastrowid
+    compagnie_beta = conn.execute(
+        """
+        INSERT INTO compagnie (nom, secteur, ville, courriel, telephone, responsable_nom, responsable_titre, site_web)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("Beta Corp.", "Service", "Montreal", "beta@example.com", "222-222-2222", "Benoit Beta", "Directeur", "beta.example.com"),
+    ).lastrowid
+
+    participant_alpha = conn.execute(
+        "INSERT INTO participant (compagnie_id, gala_categorie_id, segment_id) VALUES (?, ?, ?)",
+        (compagnie_alpha, gala_cat_innov, segment_id),
+    ).lastrowid
+    participant_alpha_narratif = conn.execute(
+        "INSERT INTO participant (compagnie_id, gala_categorie_id, segment_id) VALUES (?, ?, ?)",
+        (compagnie_alpha, gala_cat_narratif, None),
+    ).lastrowid
+    participant_beta = conn.execute(
+        "INSERT INTO participant (compagnie_id, gala_categorie_id, segment_id) VALUES (?, ?, ?)",
+        (compagnie_beta, gala_cat_croissance, None),
+    ).lastrowid
+
+    question_innov_a = conn.execute(
+        "INSERT INTO question (gala_categorie_id, texte, ponderation) VALUES (?, ?, ?)",
+        (gala_cat_innov, "Decrivez votre innovation.", 1.0),
+    ).lastrowid
+    question_innov_b = conn.execute(
+        "INSERT INTO question (gala_categorie_id, texte, ponderation) VALUES (?, ?, ?)",
+        (gala_cat_innov, "Quel impact sur votre marche?", 1.0),
+    ).lastrowid
+    question_croissance = conn.execute(
+        "INSERT INTO question (gala_categorie_id, texte, ponderation) VALUES (?, ?, ?)",
+        (gala_cat_croissance, "Quel est votre taux de croissance annuel moyen?", 1.0),
+    ).lastrowid
+    question_narratif = conn.execute(
+        "INSERT INTO question (gala_categorie_id, texte, ponderation) VALUES (?, ?, ?)",
+        (gala_cat_narratif, "Decrivez l'histoire de votre entreprise.", 1.0),
+    ).lastrowid
+
+    conn.execute(
+        "INSERT INTO reponse_participant (participant_id, question_id, contenu) VALUES (?, ?, ?)",
+        (participant_alpha, question_innov_a, "Une plateforme numerique pour le secteur manufacturier."),
+    )
+    conn.execute(
+        "INSERT INTO reponse_participant (participant_id, question_id, contenu) VALUES (?, ?, ?)",
+        (participant_alpha, question_innov_b, "Hausse de 30% des ventes chez nos clients."),
+    )
+    conn.execute(
+        "INSERT INTO reponse_participant (participant_id, question_id, contenu) VALUES (?, ?, ?)",
+        (participant_beta, question_croissance, ""),
+    )
+    conn.execute(
+        "INSERT INTO reponse_participant (participant_id, question_id, contenu) VALUES (?, ?, ?)",
+        (participant_alpha_narratif, question_narratif, "Nous avons debute dans un garage et grandi grace aux innovations."),
+    )
+    conn.commit()
+    conn.close()
+
+    admin_session(client, admin_id, prenom="Admin", nom="Chef", username="adminchef")
+
+    response = client.get("/admin/api/participants")
+    assert response.status_code == 200
+    payload = response.get_json()
+
+    filters = payload["filters"]
+    assert filters["selected"]["gala_id"] is None
+    assert filters["selected"]["categorie_id"] is None
+    assert filters["selected"]["q"] is None
+    assert len(filters["galas"]) == 1
+    gala_entry = filters["galas"][0]
+    assert gala_entry["id"] == gala_id
+    assert gala_entry["participants_count"] == 2
+    assert gala_entry["categories_count"] == 2
+    categorie_ids = {cat["id"] for cat in gala_entry["categories"]}
+    assert categorie_ids == {gala_cat_innov, gala_cat_croissance}
+
+    participants = payload["participants"]
+    assert payload["meta"]["total"] == len(participants) == 2
+    alpha_entry = next(p for p in participants if p["id"] == participant_alpha)
+    beta_entry = next(p for p in participants if p["id"] == participant_beta)
+
+    assert alpha_entry["categorie"]["id"] == gala_cat_innov
+    assert alpha_entry["categorie"]["segment_id"] == segment_id
+    assert alpha_entry["compagnie"]["nom"] == "Alpha Inc."
+    assert alpha_entry["stats"]["answered"] == 2
+    assert alpha_entry["stats"]["missing"] == 0
+    assert alpha_entry["stats"]["completion_percent"] == 100.0
+    assert len(alpha_entry["responses"]) == 3
+    assert any(resp["contenu"].startswith("Une plateforme") and resp.get("origin") is None for resp in alpha_entry["responses"])
+    narratif_entries = [resp for resp in alpha_entry["responses"] if resp.get("origin") == "narratif"]
+    assert len(narratif_entries) == 1
+    assert narratif_entries[0]["contenu"].startswith("Nous avons debute dans un garage")
+
+    assert beta_entry["categorie"]["id"] == gala_cat_croissance
+    assert beta_entry["stats"]["answered"] == 0
+    assert beta_entry["stats"]["missing"] == 1
+    assert len(beta_entry["responses"]) == 1
+    assert beta_entry["responses"][0]["contenu"] == ""
+
+    filtered_resp = client.get(f"/admin/api/participants?categorie_id={gala_cat_innov}")
+    assert filtered_resp.status_code == 200
+    filtered_payload = filtered_resp.get_json()
+    assert filtered_payload["meta"]["total"] == 1
+    assert filtered_payload["participants"][0]["id"] == participant_alpha
+    assert filtered_payload["filters"]["selected"]["categorie_id"] == gala_cat_innov
+
+    search_resp = client.get("/admin/api/participants?q=beta")
+    assert search_resp.status_code == 200
+    search_payload = search_resp.get_json()
+    assert search_payload["meta"]["total"] == 1
+    assert search_payload["participants"][0]["compagnie"]["nom"] == "Beta Corp."
