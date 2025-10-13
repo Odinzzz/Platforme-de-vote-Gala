@@ -433,6 +433,13 @@
             container.appendChild(alert);
         }
 
+        const progressInfo = data.progress || {};
+        let participantMetaLabel = formatPercent(progressInfo.percent || 0) + ' • ' +
+            (progressInfo.completed || 0) + '/' + (progressInfo.total || 0) + ' questions';
+        if (progressInfo.extra) {
+            participantMetaLabel += ' (+ ' + progressInfo.extra + ' narratif' + (progressInfo.extra > 1 ? 's' : '') + ')';
+        }
+
         const card = document.createElement('div');
         card.className = 'card border shadow-sm';
         card.innerHTML = [
@@ -440,7 +447,7 @@
             '  <div class="d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3 mb-3">',
             '    <div>',
             '      <h2 class="h5 mb-1" id="judgeParticipantTitle">' + escapeHtml(data.participant.compagnie || 'Participant') + '</h2>',
-            '      <p class="text-muted mb-0" id="judgeParticipantMeta">' + formatPercent(data.progress ? data.progress.percent : 0) + ' • ' + (data.progress ? data.progress.completed : 0) + '/' + (data.progress ? data.progress.total : 0) + ' questions</p>',
+            '      <p class="text-muted mb-0" id="judgeParticipantMeta">' + participantMetaLabel + '</p>',
             '    </div>',
             '    <div class="btn-group" role="group">',
             '      <button class="btn btn-outline-secondary" id="judgeQuestionPrev">Precedent</button>',
@@ -500,6 +507,15 @@
 
         state.flushPendingSaves = flushPendingSave;
 
+        function findQuestionById(questionId) {
+            if (!questionId) {
+                return null;
+            }
+            return questions.find(function (item) {
+                return Number(item.id) === Number(questionId);
+            }) || null;
+        }
+
         function queuePersist(questionId, partialPayload) {
             if (!questionId) {
                 return;
@@ -541,10 +557,19 @@
                 showQuestionStatus('Enregistrement...', false);
             }
             try {
+                const questionMeta = findQuestionById(questionId);
+                let targetParticipantId = state.participantId;
+                if (questionMeta && questionMeta.scope_participant_id && Number(questionMeta.scope_participant_id) !== Number(state.participantId)) {
+                    targetParticipantId = Number(questionMeta.scope_participant_id);
+                }
+                const body = Object.assign({}, payload);
+                if (Number(targetParticipantId) !== Number(state.participantId)) {
+                    body.target_participant_id = targetParticipantId;
+                }
                 const response = await fetch('/judge/api/galas/' + state.galaId + '/categories/' + state.categoryId + '/participants/' + state.participantId + '/questions/' + questionId, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
+                    body: JSON.stringify(body),
                 });
                 const result = await response.json().catch(function () { return null; });
                 if (!response.ok || !result || result.status !== 'ok') {
@@ -564,6 +589,23 @@
         }
 
         function applyNoteUpdate(questionId, notePayload) {
+            const questionMeta = findQuestionById(questionId);
+            if (!questionMeta) {
+                return;
+            }
+            if (notePayload && Object.prototype.hasOwnProperty.call(notePayload, 'valeur')) {
+                questionMeta.note = notePayload.valeur;
+            }
+            if (notePayload && Object.prototype.hasOwnProperty.call(notePayload, 'commentaire')) {
+                questionMeta.commentaire = notePayload.commentaire;
+            }
+            if (notePayload && Object.prototype.hasOwnProperty.call(notePayload, 'target_participant_id') && notePayload.target_participant_id) {
+                questionMeta.scope_participant_id = notePayload.target_participant_id;
+            }
+            recalculateParticipantMetrics();
+            if (questions[state.currentQuestionIndex] && Number(questions[state.currentQuestionIndex].id) === Number(questionId)) {
+                renderQuestion();
+            }
         }
 
         function renderQuestion() {
@@ -576,14 +618,24 @@
                 return;
             }
             const disabled = locked || submitted;
+            const badgeParts = [];
+            if (question.shared) {
+                badgeParts.push('<span class="badge text-bg-info">Narratif</span>');
+            }
+            badgeParts.push('<span class="badge text-bg-light">Ponderation ' + (question.ponderation || 1) + '</span>');
+            const badgesHtml = badgeParts.join(' ');
+            const sharedHint = question.shared
+                ? '<p class="text-info small mb-2">Question narrative commune a toutes les categories (note unique).</p>'
+                : '';
             questionContainer.innerHTML = [
                 '<div class="d-flex justify-content-between align-items-center mb-3">',
                 '  <div>',
                 '    <h3 class="h6 mb-1">Question ' + (state.currentQuestionIndex + 1) + ' / ' + questions.length + '</h3>',
                 '    <p class="text-muted small mb-0">' + formatPercent(state.participantData.progress ? state.participantData.progress.percent : 0) + ' complete</p>',
                 '  </div>',
-                '  <span class="badge text-bg-light">Ponderation ' + (question.ponderation || 1) + '</span>',
+                '  <div class="d-flex align-items-center gap-2">' + badgesHtml + '</div>',
                 '</div>',
+                sharedHint,
                 '<p class="mb-3">' + escapeHtml(question.texte || '') + '</p>',
                 '<div class="mb-4">',
                 '  <h4 class="h6 text-muted">Reponse du participant</h4>',
@@ -711,21 +763,36 @@
         if (!state.participantData) {
             return;
         }
-        const completed = state.participantData.questions.filter(function (item) {
+        const effectiveQuestions = state.participantData.questions.filter(function (item) {
+            return item && item.counts_for_progress !== false;
+        });
+        const completed = effectiveQuestions.filter(function (item) {
             return item.note !== null && item.note !== undefined;
         }).length;
-        const total = state.participantData.questions.length;
+        const total = effectiveQuestions.length;
+        const extra = state.participantData.questions.length - total;
+        const percent = total ? Math.round((completed / total) * 1000) / 10 : 0;
         state.participantData.progress = {
             completed: completed,
             total: total,
-            percent: total ? Math.round((completed / total) * 1000) / 10 : 0,
+            extra: extra > 0 ? extra : 0,
+            percent: percent,
         };
+        const metaEl = document.getElementById('judgeParticipantMeta');
+        if (metaEl) {
+            let label = formatPercent(percent) + ' • ' + completed + '/' + total + ' questions';
+            if (extra > 0) {
+                label += ' (+ ' + extra + ' narratif' + (extra > 1 ? 's' : '') + ')';
+            }
+            metaEl.textContent = label;
+        }
         if (state.categoryData) {
             const participantEntry = state.categoryData.participants.find(function (item) {
                 return Number(item.id) === Number(state.participantId);
             });
             if (participantEntry) {
-                const totalQuestions = state.categoryData.category ? state.categoryData.category.question_count : total;
+                const baseTotal = state.categoryData.category ? state.categoryData.category.question_count : total;
+                const totalQuestions = Math.max(total, baseTotal);
                 participantEntry.progress.completed_questions = completed;
                 participantEntry.progress.total_questions = totalQuestions;
                 participantEntry.progress.percent = totalQuestions ? Math.round((completed / totalQuestions) * 1000) / 10 : 0;
@@ -905,11 +972,3 @@
 
     initialise();
 })();
-
-
-
-
-
-
-
-

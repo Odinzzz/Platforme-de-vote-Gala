@@ -169,3 +169,141 @@ def test_judge_dashboard_summary_and_participant_flow(client):
     )
     assert blocked_resp.status_code == 409
     assert "soumis" in blocked_resp.get_json()["message"].lower()
+
+
+def test_judge_narratif_questions_shared_across_categories(client):
+    conn = db_module.get_db_connection()
+    roles = seed_roles(conn)
+    judge_user_id = create_user(conn, "Nadia", "Juge", "nadiajuge", roles["juge"])
+    judge_id = conn.execute(
+        "INSERT INTO juge (user_id) VALUES (?)",
+        (judge_user_id,),
+    ).lastrowid
+
+    gala_id = conn.execute(
+        "INSERT INTO gala (nom, annee, lieu, date_gala) VALUES (?, ?, ?, ?)",
+        ("Gala Entrepreneuriat", 2025, "Montreal", "2025-04-20"),
+    ).lastrowid
+    categorie_innov = conn.execute(
+        "INSERT INTO categorie (nom, description) VALUES (?, ?)",
+        ("Innovation", ""),
+    ).lastrowid
+    categorie_repr = conn.execute(
+        "INSERT INTO categorie (nom, description) VALUES (?, ?)",
+        ("Repreneuriat", ""),
+    ).lastrowid
+    categorie_narratif = conn.execute(
+        "INSERT INTO categorie (nom, description) VALUES (?, ?)",
+        ("Narratif (general)", ""),
+    ).lastrowid
+
+    gala_cat_innov = conn.execute(
+        "INSERT INTO gala_categorie (gala_id, categorie_id, ordre_affichage) VALUES (?, ?, ?)",
+        (gala_id, categorie_innov, 1),
+    ).lastrowid
+    gala_cat_repr = conn.execute(
+        "INSERT INTO gala_categorie (gala_id, categorie_id, ordre_affichage) VALUES (?, ?, ?)",
+        (gala_id, categorie_repr, 2),
+    ).lastrowid
+    gala_cat_narratif = conn.execute(
+        "INSERT INTO gala_categorie (gala_id, categorie_id, ordre_affichage) VALUES (?, ?, ?)",
+        (gala_id, categorie_narratif, 0),
+    ).lastrowid
+
+    conn.execute(
+        "INSERT INTO juge_gala_categorie (juge_id, gala_categorie_id) VALUES (?, ?)",
+        (judge_id, gala_cat_innov),
+    )
+    conn.execute(
+        "INSERT INTO juge_gala_categorie (juge_id, gala_categorie_id) VALUES (?, ?)",
+        (judge_id, gala_cat_repr),
+    )
+
+    compagnie_id = conn.execute(
+        "INSERT INTO compagnie (nom, secteur) VALUES (?, ?)",
+        ("Compagnie X", "Tech"),
+    ).lastrowid
+
+    participant_innov = conn.execute(
+        "INSERT INTO participant (compagnie_id, gala_categorie_id, segment_id) VALUES (?, ?, ?)",
+        (compagnie_id, gala_cat_innov, None),
+    ).lastrowid
+    participant_repr = conn.execute(
+        "INSERT INTO participant (compagnie_id, gala_categorie_id, segment_id) VALUES (?, ?, ?)",
+        (compagnie_id, gala_cat_repr, None),
+    ).lastrowid
+    participant_narratif = conn.execute(
+        "INSERT INTO participant (compagnie_id, gala_categorie_id, segment_id) VALUES (?, ?, ?)",
+        (compagnie_id, gala_cat_narratif, None),
+    ).lastrowid
+
+    question_innov = conn.execute(
+        "INSERT INTO question (gala_categorie_id, texte, ponderation) VALUES (?, ?, ?)",
+        (gala_cat_innov, "Innovation cle", 1.0),
+    ).lastrowid
+    question_repr = conn.execute(
+        "INSERT INTO question (gala_categorie_id, texte, ponderation) VALUES (?, ?, ?)",
+        (gala_cat_repr, "Transmission", 1.0),
+    ).lastrowid
+    question_narratif = conn.execute(
+        "INSERT INTO question (gala_categorie_id, texte, ponderation) VALUES (?, ?, ?)",
+        (gala_cat_narratif, "Narratif global", 1.0),
+    ).lastrowid
+
+    conn.execute(
+        "INSERT INTO reponse_participant (participant_id, question_id, contenu) VALUES (?, ?, ?)",
+        (participant_innov, question_innov, "Reponse innovation"),
+    )
+    conn.execute(
+        "INSERT INTO reponse_participant (participant_id, question_id, contenu) VALUES (?, ?, ?)",
+        (participant_repr, question_repr, "Reponse repreneuriat"),
+    )
+    conn.execute(
+        "INSERT INTO reponse_participant (participant_id, question_id, contenu) VALUES (?, ?, ?)",
+        (participant_narratif, question_narratif, "Narratif commun"),
+    )
+
+    conn.commit()
+    conn.close()
+
+    judge_session(client, judge_user_id)
+
+    detail_innov_resp = client.get(
+        f"/judge/api/galas/{gala_id}/categories/{gala_cat_innov}/participants/{participant_innov}"
+    )
+    assert detail_innov_resp.status_code == 200
+    detail_innov = detail_innov_resp.get_json()
+    assert detail_innov["progress"]["total"] == 1
+    assert detail_innov["progress"]["extra"] == 1
+    narratif_question = next(
+        item for item in detail_innov["questions"] if item.get("source") == "narratif"
+    )
+    assert narratif_question["shared"] is True
+    assert narratif_question["scope_participant_id"] == participant_narratif
+    assert narratif_question["note"] is None
+
+    patch_resp = client.patch(
+        f"/judge/api/galas/{gala_id}/categories/{gala_cat_innov}/participants/{participant_innov}/questions/{question_narratif}",
+        json={"valeur": 9, "target_participant_id": participant_narratif},
+    )
+    assert patch_resp.status_code == 200
+
+    check_conn = db_module.get_db_connection()
+    note_row = check_conn.execute(
+        "SELECT participant_id, valeur FROM note WHERE juge_id = ? AND question_id = ?",
+        (judge_id, question_narratif),
+    ).fetchone()
+    check_conn.close()
+    assert note_row is not None
+    assert note_row["participant_id"] == participant_narratif
+    assert note_row["valeur"] == 9
+
+    detail_repr_resp = client.get(
+        f"/judge/api/galas/{gala_id}/categories/{gala_cat_repr}/participants/{participant_repr}"
+    )
+    assert detail_repr_resp.status_code == 200
+    detail_repr = detail_repr_resp.get_json()
+    shared_again = next(
+        item for item in detail_repr["questions"] if item.get("source") == "narratif"
+    )
+    assert shared_again["note"] == 9
