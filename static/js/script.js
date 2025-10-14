@@ -224,6 +224,7 @@
                 // ignore network failures for logout
             }
             renderUnauthenticated();
+            window.location.href = "/";
         });
     }
 

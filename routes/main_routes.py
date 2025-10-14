@@ -31,7 +31,8 @@ def register():
     payload = request.get_json(silent=True) or {}
     prenom = (payload.get("prenom") or "").strip()
     nom = (payload.get("nom") or "").strip()
-    username = (payload.get("username") or "").strip()
+    username_input = (payload.get("username") or "").strip()
+    username = username_input.lower()
     password = payload.get("password") or ""
     courriel = (payload.get("courriel") or "").strip() or None
     telephone = (payload.get("telephone") or "").strip() or None
@@ -130,7 +131,8 @@ def register():
 @main_bp.route("/auth/login", methods=["POST"])
 def login():
     payload = request.get_json(silent=True) or {}
-    username = (payload.get("username") or "").strip()
+    username_input = (payload.get("username") or "").strip()
+    username = username_input.lower()
     password = payload.get("password") or ""
 
     if not username or not password:

@@ -26,10 +26,11 @@ def test_register_creates_member_role(client):
         JOIN role ON user.role_id = role.id
         WHERE user.username = ?
         """,
-        (payload["username"],),
+        (payload["username"].lower(),),
     ).fetchone()
     conn.close()
     assert row is not None
+    assert row["username"] == payload["username"].lower()
     assert row["role_nom"].lower() == "membre"
 
 
@@ -60,7 +61,7 @@ def test_login_succeeds_with_valid_credentials(client):
 
     response = client.post(
         "/auth/login",
-        json={"username": "jeanmartin", "password": "motdepasse123"},
+        json={"username": "JEANMARTIN", "password": "motdepasse123"},
     )
 
     assert response.status_code == 200
