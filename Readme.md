@@ -45,7 +45,7 @@ cd GalaApp
 ## 🔁 4. Re-cloner ton dépôt Git
 
 ```bash
-git clone https://github.com/TON-UTILISATEUR/TON-DEPOT.git .
+git clone https://github.com/Odinzzz/Platforme-de-vote-Gala.git .
 ```
 
 ---
