@@ -29,3 +29,7 @@
 ## Security & Configuration Tips
 - Keep secrets out of the repo; `app.secret_key` in `run.py` should be overridden via environment variables in production.
 - Regenerate the SQLite database with `models.init_db` when schema changes land, and ensure new roles or fixtures align with `routes/admin_routes.py` logic.
+## Docker
+- docker build -t plateforme-gala .
+- docker run --rm -p 5000:5000 -e SECRET_KEY="change-me" -v "C:\Optimation\Repo\Platforme-de-vote-Gala/data:/app/data" plateforme-gala
+  - Monte /app/data pour conserver gala.db entre les redémarrages.
