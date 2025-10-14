@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime, UTC
 from typing import Any, Dict, List, Optional
 
@@ -10,6 +11,7 @@ from models.db import get_db_connection
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
 
 ROLE_DISPLAY_ORDER = ["admin", "juge", "membre"]
+FAVORITE_BONUS = 0.5
 
 
 def _require_admin() -> None:
@@ -341,6 +343,10 @@ def update_judge_assignments(user_id: int):
 def galas_page():
     return render_template("admin/galas.html", user=session.get("user"))
 
+
+@admin_bp.route("/results", methods=["GET"])
+def results_page():
+    return render_template("admin/results.html", user=session.get("user"))
 
 
 def _serialize_gala_row(row, lock_row=None, submissions_count=0) -> Dict[str, Any]:
@@ -1537,5 +1543,474 @@ def list_admin_participants():
 
 
 
+# ==============================
+# Admin Results dashboard
+# ==============================
+@admin_bp.route("/api/results", methods=["GET"])
+def admin_results_dashboard():
+    gala_id = request.args.get("gala_id", type=int)
+    selected_category_id = request.args.get("categorie_id", type=int)
+
+    conn = get_db_connection()
+
+    gala_rows = conn.execute(
+        "SELECT id, nom, annee FROM gala ORDER BY annee DESC, id DESC"
+    ).fetchall()
+
+    gala_options = [
+        {"id": row["id"], "nom": row["nom"], "annee": row["annee"]}
+        for row in gala_rows
+    ]
+
+    if not gala_rows:
+        conn.close()
+        return jsonify({
+            "filters": {
+                "galas": [],
+                "categories": [],
+                "selected": {"gala_id": None, "categorie_id": None},
+            },
+            "meta": {
+                "favorite_bonus": FAVORITE_BONUS,
+            },
+            "judges": [],
+            "categories": [],
+        })
+
+    available_gala_ids = {row["id"] for row in gala_rows}
+    target_gala_id = gala_id if gala_id in available_gala_ids else gala_rows[0]["id"]
+    gala_info_row = next(row for row in gala_rows if row["id"] == target_gala_id)
+
+    category_rows = conn.execute(
+        """
+        SELECT
+            gc.id,
+            gc.ordre_affichage,
+            c.nom,
+            COUNT(DISTINCT q.id) AS question_count,
+            COUNT(DISTINCT p.id) AS participant_count
+        FROM gala_categorie AS gc
+        JOIN categorie AS c ON c.id = gc.categorie_id
+        LEFT JOIN question AS q ON q.gala_categorie_id = gc.id
+        LEFT JOIN participant AS p ON p.gala_categorie_id = gc.id
+        WHERE gc.gala_id = ?
+        GROUP BY gc.id
+        ORDER BY gc.ordre_affichage, c.nom COLLATE NOCASE
+        """,
+        (target_gala_id,),
+    ).fetchall()
+
+    category_options = [
+        {
+            "id": row["id"],
+            "nom": row["nom"],
+            "question_count": row["question_count"],
+            "participant_count": row["participant_count"],
+        }
+        for row in category_rows
+    ]
+
+    category_ids_all = [row["id"] for row in category_rows]
+
+    if not category_rows:
+        conn.close()
+        return jsonify({
+            "filters": {
+                "galas": gala_options,
+                "categories": [],
+                "selected": {"gala_id": target_gala_id, "categorie_id": None},
+            },
+            "meta": {
+                "gala": {
+                    "id": gala_info_row["id"],
+                    "nom": gala_info_row["nom"],
+                    "annee": gala_info_row["annee"],
+                },
+                "favorite_bonus": FAVORITE_BONUS,
+                "overall_completion_percent": 0.0,
+                "overall_recorded": 0,
+                "overall_expected": 0,
+                "judges_total": 0,
+                "judges_submitted": 0,
+                "participants_total": 0,
+                "categories_total": 0,
+            },
+            "judges": [],
+            "categories": [],
+        })
+
+    if selected_category_id and selected_category_id not in category_ids_all:
+        selected_category_id = None
+
+    if selected_category_id:
+        category_ids = [selected_category_id]
+    else:
+        category_ids = category_ids_all[:]
+
+    categories_lookup: Dict[int, Dict[str, Any]] = {}
+    for row in category_rows:
+        categories_lookup[row["id"]] = {
+            "id": row["id"],
+            "nom": row["nom"],
+            "question_count": row["question_count"],
+            "participant_count": row["participant_count"],
+            "judge_count": 0,
+            "total_weight": 0.0,
+            "participants": [],
+            "recorded_notes": 0,
+            "expected_notes_total": 0,
+            "favorites_count": 0,
+        }
+
+    if category_ids_all:
+        placeholders_all = ",".join("?" for _ in category_ids_all)
+        judge_counts_rows = conn.execute(
+            f"""
+            SELECT jgc.gala_categorie_id, COUNT(DISTINCT jgc.juge_id) AS judge_count
+            FROM juge_gala_categorie AS jgc
+            WHERE jgc.gala_categorie_id IN ({placeholders_all})
+            GROUP BY jgc.gala_categorie_id
+            """,
+            tuple(category_ids_all),
+        ).fetchall()
+        weight_rows = conn.execute(
+            f"""
+            SELECT gala_categorie_id, SUM(ponderation) AS total_weight
+            FROM question
+            WHERE gala_categorie_id IN ({placeholders_all})
+            GROUP BY gala_categorie_id
+            """,
+            tuple(category_ids_all),
+        ).fetchall()
+    else:
+        judge_counts_rows = []
+        weight_rows = []
+
+    judge_counts_map = {row["gala_categorie_id"]: row["judge_count"] for row in judge_counts_rows}
+    weight_map = {row["gala_categorie_id"]: row["total_weight"] or 0.0 for row in weight_rows}
+
+    for cat_id, info in categories_lookup.items():
+        judge_count = judge_counts_map.get(cat_id, 0)
+        info["judge_count"] = judge_count
+        info["total_weight"] = weight_map.get(cat_id, 0.0) or 0.0
+        info["expected_notes_total"] = info["question_count"] * info["participant_count"] * judge_count
+
+    favorite_rows = conn.execute(
+        """
+        SELECT cdc.participant_id, cdc.juge_id, per.prenom, per.nom
+        FROM coup_de_coeur AS cdc
+        JOIN juge AS j ON j.id = cdc.juge_id
+        JOIN user AS u ON u.id = j.user_id
+        JOIN personne AS per ON per.id = u.personne_id
+        WHERE cdc.gala_id = ?
+        """,
+        (target_gala_id,),
+    ).fetchall()
+
+    favorite_lists: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    for row in favorite_rows:
+        favorite_lists[row["participant_id"]].append(
+            {
+                "juge_id": row["juge_id"],
+                "nom": f"{row['prenom']} {row['nom']}",
+            }
+        )
+
+    judge_rows = conn.execute(
+        """
+        SELECT DISTINCT j.id AS juge_id, per.prenom, per.nom
+        FROM juge_gala_categorie AS jgc
+        JOIN juge AS j ON j.id = jgc.juge_id
+        JOIN user AS u ON u.id = j.user_id
+        JOIN personne AS per ON per.id = u.personne_id
+        JOIN gala_categorie AS gc ON gc.id = jgc.gala_categorie_id
+        WHERE gc.gala_id = ?
+        ORDER BY per.nom COLLATE NOCASE, per.prenom COLLATE NOCASE
+        """,
+        (target_gala_id,),
+    ).fetchall()
+
+    if category_ids:
+        placeholders_selected = ",".join("?" for _ in category_ids)
+        expected_rows = conn.execute(
+            f"""
+            SELECT jgc.juge_id, COUNT(*) AS total_required
+            FROM juge_gala_categorie AS jgc
+            JOIN question AS q ON q.gala_categorie_id = jgc.gala_categorie_id
+            JOIN participant AS p ON p.gala_categorie_id = jgc.gala_categorie_id
+            WHERE jgc.gala_categorie_id IN ({placeholders_selected})
+            GROUP BY jgc.juge_id
+            """,
+            tuple(category_ids),
+        ).fetchall()
+    else:
+        expected_rows = []
+
+    answered_rows = conn.execute(
+        """
+        SELECT n.juge_id, COUNT(*) AS total_answered
+        FROM note AS n
+        JOIN participant AS p ON p.id = n.participant_id
+        JOIN gala_categorie AS gc ON gc.id = p.gala_categorie_id
+        WHERE gc.gala_id = ?
+        GROUP BY n.juge_id
+        """,
+        (target_gala_id,),
+    ).fetchall()
+
+    submission_rows = conn.execute(
+        "SELECT juge_id, submitted_at FROM juge_gala_submission WHERE gala_id = ?",
+        (target_gala_id,),
+    ).fetchall()
+
+    expected_map = {row["juge_id"]: row["total_required"] for row in expected_rows}
+    answered_map = {row["juge_id"]: row["total_answered"] for row in answered_rows}
+    submitted_map = {row["juge_id"]: row["submitted_at"] for row in submission_rows}
+
+    judges_payload: List[Dict[str, Any]] = []
+    for row in judge_rows:
+        juge_id = row["juge_id"]
+        expected_total = expected_map.get(juge_id, 0)
+        answered_total = answered_map.get(juge_id, 0)
+        percent = round((answered_total / expected_total) * 100, 1) if expected_total else 0.0
+        submitted_at = submitted_map.get(juge_id)
+        submitted = submitted_at is not None
+        status = "soumis" if submitted else ("en_cours" if answered_total > 0 else "en_attente")
+        judges_payload.append(
+            {
+                "id": juge_id,
+                "prenom": row["prenom"],
+                "nom": row["nom"],
+                "answered_notes": answered_total,
+                "expected_notes": expected_total,
+                "progress_percent": percent,
+                "submitted": submitted,
+                "submitted_at": submitted_at,
+                "status": status,
+            }
+        )
+
+    if not category_ids:
+        conn.close()
+        return jsonify({
+            "filters": {
+                "galas": gala_options,
+                "categories": category_options,
+                "selected": {"gala_id": target_gala_id, "categorie_id": selected_category_id},
+            },
+            "meta": {
+                "gala": {
+                    "id": gala_info_row["id"],
+                    "nom": gala_info_row["nom"],
+                    "annee": gala_info_row["annee"],
+                },
+                "favorite_bonus": FAVORITE_BONUS,
+                "overall_completion_percent": 0.0,
+                "overall_recorded": 0,
+                "overall_expected": 0,
+                "judges_total": len(judges_payload),
+                "judges_submitted": sum(1 for judge in judges_payload if judge["submitted"]),
+                "participants_total": 0,
+                "categories_total": 0,
+            },
+            "judges": judges_payload,
+            "categories": [],
+        })
+
+    placeholders_selected = ",".join("?" for _ in category_ids)
+    participant_rows = conn.execute(
+        f"""
+        SELECT
+            p.id AS participant_id,
+            p.gala_categorie_id,
+            comp.nom AS compagnie_nom,
+            comp.ville AS compagnie_ville,
+            comp.secteur AS compagnie_secteur,
+            SUM(CASE WHEN n.valeur IS NOT NULL THEN n.valeur * q.ponderation ELSE 0 END) AS weighted_sum,
+            SUM(CASE WHEN n.valeur IS NOT NULL THEN q.ponderation ELSE 0 END) AS answered_weight,
+            COUNT(DISTINCT CASE WHEN n.valeur IS NOT NULL THEN n.juge_id END) AS judges_answered,
+            COUNT(DISTINCT CASE WHEN n.valeur IS NOT NULL THEN q.id || '-' || n.juge_id END) AS notes_recorded
+        FROM participant AS p
+        JOIN compagnie AS comp ON comp.id = p.compagnie_id
+        JOIN question AS q ON q.gala_categorie_id = p.gala_categorie_id
+        LEFT JOIN note AS n ON n.question_id = q.id AND n.participant_id = p.id
+        WHERE p.gala_categorie_id IN ({placeholders_selected})
+        GROUP BY p.id, p.gala_categorie_id, comp.nom, comp.ville, comp.secteur
+        ORDER BY comp.nom COLLATE NOCASE
+        """,
+        tuple(category_ids),
+    ).fetchall()
+
+    categories_to_include = [row for row in category_rows if row["id"] in category_ids]
+
+    for info in categories_lookup.values():
+        info["recorded_notes"] = 0
+        info["favorites_count"] = 0
+
+    for row in participant_rows:
+        category_id = row["gala_categorie_id"]
+        info = categories_lookup.get(category_id)
+        if not info:
+            continue
+        weighted_sum = row["weighted_sum"] or 0.0
+        answered_weight = row["answered_weight"] or 0.0
+        base_score = None
+        if answered_weight > 0:
+            base_score = weighted_sum / answered_weight
+        favorite_entries = favorite_lists.get(row["participant_id"], [])
+        bonus_value = len(favorite_entries) * FAVORITE_BONUS
+        final_score = base_score + bonus_value if base_score is not None else None
+
+        question_count = info["question_count"] or 0
+        judge_count = info["judge_count"] or 0
+        notes_expected = question_count * judge_count
+        notes_recorded = row["notes_recorded"] or 0
+
+        info["recorded_notes"] += notes_recorded
+        info["favorites_count"] += len(favorite_entries)
+
+        if notes_expected <= 0:
+            participant_status = "en_attente"
+        elif notes_recorded == 0:
+            participant_status = "en_attente"
+        elif notes_recorded >= notes_expected:
+            participant_status = "complet"
+        else:
+            participant_status = "en_cours"
+
+        progress_percent = round((notes_recorded / notes_expected) * 100, 1) if notes_expected else 0.0
+
+        participant_payload = {
+            "id": row["participant_id"],
+            "compagnie": {
+                "nom": row["compagnie_nom"],
+                "ville": row["compagnie_ville"],
+                "secteur": row["compagnie_secteur"],
+            },
+            "score_base": round(base_score, 2) if base_score is not None else None,
+            "score_bonus": round(bonus_value, 2) if bonus_value else 0.0,
+            "score_final": round(final_score, 2) if final_score is not None else None,
+            "score_value": final_score,
+            "status": participant_status,
+            "notes": {
+                "recorded": notes_recorded,
+                "expected": notes_expected,
+                "progress_percent": progress_percent,
+            },
+            "favorites": [fav["nom"] for fav in favorite_entries],
+            "favorites_count": len(favorite_entries),
+            "judges_answered": row["judges_answered"] or 0,
+        }
+
+        info["participants"].append(participant_payload)
+
+    categories_payload: List[Dict[str, Any]] = []
+    participants_total = 0
+    overall_expected_notes = 0
+    overall_recorded_notes = 0
+
+    for category_row in categories_to_include:
+        info = categories_lookup[category_row["id"]]
+        total_expected = info["expected_notes_total"]
+        overall_expected_notes += total_expected
+        overall_recorded_notes += info["recorded_notes"]
+
+        if total_expected == 0:
+            category_status = "en_attente"
+        elif info["recorded_notes"] == 0:
+            category_status = "en_attente"
+        elif info["recorded_notes"] >= total_expected:
+            category_status = "complet"
+        else:
+            category_status = "en_cours"
+
+        progress_percent = round((info["recorded_notes"] / total_expected) * 100, 1) if total_expected else 0.0
 
 
+
+        participants_sorted = sorted(
+            info["participants"],
+            key=lambda item: (
+                item.get("score_value") is None,
+                -(item.get("score_value") or 0.0),
+                (item["compagnie"]["nom"] or "").lower(),
+            ),
+        )
+
+        participants_total += len(participants_sorted)
+
+        rank_counter = 0
+        current_rank = 0
+        previous_score = None
+        for participant in participants_sorted:
+            value = participant.get("score_value")
+            if value is None:
+                participant["rank"] = None
+                continue
+            rank_counter += 1
+            if previous_score is None or abs(value - previous_score) > 1e-6:
+                current_rank = rank_counter
+                previous_score = value
+            participant["rank"] = current_rank
+
+        top_participant = next((p for p in participants_sorted if p.get("rank") == 1), None)
+
+        for participant in participants_sorted:
+            participant.pop("score_value", None)
+
+        categories_payload.append(
+            {
+                "id": info["id"],
+                "nom": info["nom"],
+                "question_count": info["question_count"],
+                "participant_count": info["participant_count"],
+                "judge_count": info["judge_count"],
+                "status": category_status,
+                "progress": {
+                    "percent": progress_percent,
+                    "recorded": info["recorded_notes"],
+                    "expected": total_expected,
+                },
+                "participants": participants_sorted,
+                "top_participant": top_participant,
+                "favorites_count": info["favorites_count"],
+            }
+        )
+
+    overall_completion_percent = round((overall_recorded_notes / overall_expected_notes) * 100, 1) if overall_expected_notes else 0.0
+
+    judges_total = len(judges_payload)
+    judges_submitted = sum(1 for judge in judges_payload if judge["submitted"])
+
+    meta_payload = {
+        "gala": {
+            "id": gala_info_row["id"],
+            "nom": gala_info_row["nom"],
+            "annee": gala_info_row["annee"],
+        },
+        "favorite_bonus": FAVORITE_BONUS,
+        "overall_completion_percent": overall_completion_percent,
+        "overall_recorded": overall_recorded_notes,
+        "overall_expected": overall_expected_notes,
+        "judges_total": judges_total,
+        "judges_submitted": judges_submitted,
+        "participants_total": participants_total,
+        "categories_total": len(categories_payload),
+    }
+
+    response = {
+        "filters": {
+            "galas": gala_options,
+            "categories": category_options,
+            "selected": {
+                "gala_id": target_gala_id,
+                "categorie_id": selected_category_id,
+            },
+        },
+        "meta": meta_payload,
+        "judges": judges_payload,
+        "categories": categories_payload,
+    }
+
+    conn.close()
+    return jsonify(response)

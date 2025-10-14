@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row g-4">
+    <div class="col-lg-3">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h1 class="h5 mb-1">Résultats</h1>
+                <p class="text-muted small mb-3">Suivez la progression des juges et les scores des participants.</p>
+                <div class="mb-3">
+                    <label class="form-label" for="resultsGalaSelect">Gala</label>
+                    <select class="form-select" id="resultsGalaSelect">
+                        <option value="">Sélectionner un gala</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="resultsCategorieSelect">Catégorie</label>
+                    <select class="form-select" id="resultsCategorieSelect" disabled>
+                        <option value="">Toutes les catégories</option>
+                    </select>
+                </div>
+                <div class="alert alert-info small mb-0" id="resultsBonusInfo">
+                    Bonus coup de cœur appliqué : <span class="fw-semibold" id="resultsFavoriteBonusValue">0</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-9">
+        <div class="card shadow-sm mb-4">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <h2 class="h5 mb-1" id="resultsSummaryTitle">Synthèse</h2>
+                        <p class="text-muted small mb-0" id="resultsSummarySubtitle">Chargement des indicateurs...</p>
+                    </div>
+                    <div class="spinner-border text-primary d-none" role="status" id="resultsLoadingSpinner">
+                        <span class="visually-hidden">Chargement...</span>
+                    </div>
+                </div>
+                <div id="resultsSummaryCards" class="row g-3"></div>
+            </div>
+        </div>
+        <div id="resultsErrorState" class="alert alert-danger d-none" role="alert">
+            Une erreur est survenue lors du chargement des résultats.
+        </div>
+        <div id="resultsEmptyState" class="alert alert-info d-none" role="alert">
+            Aucun participant à afficher pour cette sélection.
+        </div>
+        <div id="resultsCategoriesContainer" class="vstack gap-4"></div>
+        <div class="card shadow-sm mt-4">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h3 class="h6 mb-0">Progression des juges</h3>
+                    <span class="badge text-bg-light" id="resultsJudgeProgressBadge">0 / 0</span>
+                </div>
+                <div id="resultsJudgesContainer" class="vstack gap-2"></div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/admin_results.js') }}"></script>
+{% endblock %}

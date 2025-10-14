@@ -57,7 +57,10 @@ def strip_accents(s: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
 
 def keyify(s: str) -> str:
-    return strip_accents(norm(s)).lower()
+    cleaned = norm(s)
+    cleaned = cleaned.replace("–", "-").replace("—", "-")
+    cleaned = strip_accents(cleaned)
+    return cleaned.lower()
 
 # =========================================
 #  Catégories ciblées & questions (doivent correspondre aux en-têtes CSV)
@@ -92,6 +95,9 @@ CATEGORY_ALIASES: Dict[str, str] = {
     "contribution a la vitalite locale": "Contribution à la Vitalité locale",
     # Développement éco & régional
     "contribution au developpement economique et regional": "Contribution au développement économique et régional",
+    "rh – meilleures pratiques": "RH – Meilleures pratiques",
+    "rh - meilleures pratiques": "RH – Meilleures pratiques",
+    "rh meilleures pratiques": "RH – Meilleures pratiques"
 }
 
 CATEGORY_QUESTIONS: Dict[str, List[str]] = {
