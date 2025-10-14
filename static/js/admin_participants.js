@@ -16,6 +16,15 @@
     const countBadge = document.getElementById("participantsCountBadge");
     const viewCardsButton = document.getElementById("participantsViewCardsButton");
     const viewTableButton = document.getElementById("participantsViewTableButton");
+    const responsesModalEl = document.getElementById("participantResponsesModal");
+    const responsesModalTitle = document.getElementById("participantResponsesModalTitle");
+    const responsesModalBody = document.getElementById("participantResponsesBody");
+    const responsesModalAlert = document.getElementById("participantResponsesAlert");
+    const responsesModalSaveButton = document.getElementById("participantResponsesSaveButton");
+    let responsesModal = null;
+    if (responsesModalEl && typeof bootstrap !== "undefined") {
+        responsesModal = new bootstrap.Modal(responsesModalEl);
+    }
 
     if (!galaSelect || !categorieSelect || !cardsContainer) {
         return;
@@ -32,7 +41,9 @@
         missingOnly: false,
         participants: [],
         filteredParticipants: [],
-        view: "cards"
+        view: "cards",
+        editingParticipantId: null,
+        currentResponses: null
     };
 
     function escapeHtml(value) {
@@ -76,7 +87,159 @@
         }
     }
 
-    function normalizeId(value) {
+        function showResponsesAlert(type, message) {
+        if (!responsesModalAlert) {
+            return;
+        }
+        responsesModalAlert.className = "alert d-none";
+        responsesModalAlert.textContent = "";
+        if (!type || !message) {
+            return;
+        }
+        var bootstrapClass = "alert-info";
+        if (type === "success") {
+            bootstrapClass = "alert-success";
+        } else if (type === "danger") {
+            bootstrapClass = "alert-danger";
+        } else if (type === "warning") {
+            bootstrapClass = "alert-warning";
+        }
+        responsesModalAlert.className = "alert " + bootstrapClass;
+        responsesModalAlert.textContent = message;
+    }
+
+    function resetResponsesModal() {
+        if (responsesModalSaveButton) {
+            responsesModalSaveButton.disabled = false;
+        }
+        showResponsesAlert(null, "");
+        if (responsesModalBody) {
+            responsesModalBody.innerHTML = "<div class=\"placeholder-glow\"><div class=\"placeholder col-12 mb-2\" style=\"height: 32px;\"></div><div class=\"placeholder col-12 mb-2\" style=\"height: 80px;\"></div><div class=\"placeholder col-10\" style=\"height: 80px;\"></div></div>";
+        }
+        if (responsesModalTitle) {
+            responsesModalTitle.textContent = "Modifier les reponses";
+        }
+    }
+
+    function renderResponsesModalContent(data) {
+        if (!responsesModalBody) {
+            return;
+        }
+        var participant = data.participant || {};
+        var category = data.category || {};
+        var questions = Array.isArray(data.questions) ? data.questions : [];
+        var titleParts = [];
+        if (participant.compagnie) {
+            titleParts.push(participant.compagnie);
+        } else if (participant.id) {
+            titleParts.push("Participant #" + participant.id);
+        }
+        if (category.nom) {
+            titleParts.push(category.nom);
+        }
+        if (responsesModalTitle) {
+            responsesModalTitle.textContent = titleParts.join(" - ") || "Modifier les reponses";
+        }
+        if (!questions.length) {
+            responsesModalBody.innerHTML = "<p class=\"text-muted small mb-0\">Aucune question disponible pour ce participant.</p>";
+            return;
+        }
+        var blocks = questions.map(function (question, index) {
+            var value = question.reponse || "";
+            var label = "Question " + (index + 1);
+            return [
+                "<div class=\"mb-3\">",
+                "  <label class=\"form-label\">" + escapeHtml(label) + "<span class=\"text-muted\"> - " + escapeHtml(question.texte || "") + "</span></label>",
+                "  <textarea class=\"form-control\" rows=\"4\" data-question-id=\"" + question.id + "\" data-original-value=\"\">" + escapeHtml(value) + "</textarea>",
+                "</div>"
+            ].join("");
+        }).join("");
+        responsesModalBody.innerHTML = blocks;
+        Array.from(responsesModalBody.querySelectorAll("textarea[data-question-id]"))
+            .forEach(function (textarea) {
+                textarea.dataset.originalValue = textarea.value.trim();
+            });
+    }
+
+    async function openResponsesModal(participantId) {
+        if (!responsesModal) {
+            return;
+        }
+        state.editingParticipantId = participantId;
+        state.currentResponses = null;
+        resetResponsesModal();
+        responsesModal.show();
+        try {
+            const response = await fetch("/admin/api/participants/" + participantId + "/responses");
+            if (!response.ok) {
+                throw new Error("Erreur de chargement");
+            }
+            const payload = await response.json();
+            state.currentResponses = payload;
+            renderResponsesModalContent(payload);
+        } catch (error) {
+            showResponsesAlert("danger", "Impossible de charger les reponses.");
+            if (responsesModalBody) {
+                responsesModalBody.innerHTML = "<p class=\"text-danger small mb-0\">Une erreur est survenue lors du chargement.</p>";
+            }
+        }
+    }
+
+    async function saveParticipantResponses() {
+        if (!state.editingParticipantId || !responsesModalBody) {
+            return;
+        }
+        const textareas = Array.from(responsesModalBody.querySelectorAll("textarea[data-question-id]"));
+        const changes = textareas.map(function (textarea) {
+            const questionId = Number(textarea.getAttribute("data-question-id"));
+            const originalValue = textarea.dataset.originalValue || "";
+            const currentValue = textarea.value.trim();
+            if (!Number.isFinite(questionId)) {
+                return null;
+            }
+            if (originalValue === currentValue) {
+                return null;
+            }
+            return { questionId: questionId, contenu: currentValue };
+        }).filter(Boolean);
+        if (!changes.length) {
+            showResponsesAlert("info", "Aucune modification a enregistrer.");
+            return;
+        }
+        if (responsesModalSaveButton) {
+            responsesModalSaveButton.disabled = true;
+        }
+        try {
+            for (const change of changes) {
+                const response = await fetch("/admin/api/participants/" + state.editingParticipantId + "/questions/" + change.questionId, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ contenu: change.contenu })
+                });
+                if (!response.ok) {
+                    const payload = await response.json().catch(function () { return null; });
+                    const message = payload && payload.message ? payload.message : "Echec de l'enregistrement.";
+                    throw new Error(message);
+                }
+                const textarea = responsesModalBody.querySelector('textarea[data-question-id="' + change.questionId + '"]');
+                if (textarea) {
+                    textarea.dataset.originalValue = change.contenu || "";
+                }
+            }
+            showResponsesAlert("success", "Reponses enregistrees.");
+            state.currentResponses = null;
+            fetchParticipants();
+        } catch (error) {
+            showResponsesAlert("danger", error.message || "Echec de l'enregistrement.");
+        } finally {
+            if (responsesModalSaveButton) {
+                responsesModalSaveButton.disabled = false;
+            }
+        }
+    }
+
+
+function normalizeId(value) {
         if (value === null || value === undefined || value === "") {
             return null;
         }
@@ -335,12 +498,15 @@
                 rowCells.push(
                     `<td>${escapeHtml(responseLabel)}</td>`
                 );
+                rowCells.push(
+                    `<td><button class="btn btn-sm btn-outline-secondary" type="button" data-action="edit-responses" data-participant-id="${participant.id}">Modifier</button></td>`
+                );
 
                 rows.push(`<tr>${rowCells.join("")}</tr>`);
             });
         });
 
-        tableBody.innerHTML = rows.join("") || '<tr><td colspan="6" class="text-muted text-center">Aucun participant</td></tr>';
+        tableBody.innerHTML = rows.join("") || '<tr><td colspan="7" class="text-muted text-center">Aucun participant</td></tr>';
         tableWrapper.classList.toggle("d-none", rows.length === 0);
     }
 
@@ -436,7 +602,8 @@
                 '    </div>',
                 '  </div>',
                 contactFields ? `  <div class="small text-muted mt-3 d-flex flex-wrap gap-2">${contactFields}</div>` : "",
-                '  <div class="mt-3">',
+                '  <div class="mt-3 d-flex flex-wrap gap-2">',
+                `    <button class="btn btn-sm btn-outline-secondary" type="button" data-action="edit-responses" data-participant-id="${participant.id}">Modifier les reponses</button>`,
                 `    <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#${collapseId}" aria-expanded="false">Voir les reponses</button>`,
                 '  </div>',
                 `  <div class="collapse mt-3" id="${collapseId}">`,
@@ -622,6 +789,51 @@
     if (viewTableButton) {
         viewTableButton.addEventListener("click", function () {
             switchView("table");
+        });
+    }
+
+
+    if (responsesModalSaveButton) {
+        responsesModalSaveButton.addEventListener("click", function () {
+            saveParticipantResponses();
+        });
+    }
+
+    if (responsesModalEl) {
+        responsesModalEl.addEventListener("hidden.bs.modal", function () {
+            state.editingParticipantId = null;
+            state.currentResponses = null;
+            resetResponsesModal();
+        });
+    }
+
+    if (cardsContainer) {
+        cardsContainer.addEventListener("click", function (event) {
+            var trigger = event.target.closest('[data-action="edit-responses"]');
+            if (!trigger) {
+                return;
+            }
+            event.preventDefault();
+            var participantId = Number(trigger.getAttribute("data-participant-id"));
+            if (!Number.isFinite(participantId)) {
+                return;
+            }
+            openResponsesModal(participantId);
+        });
+    }
+
+    if (tableWrapper) {
+        tableWrapper.addEventListener("click", function (event) {
+            var trigger = event.target.closest('[data-action="edit-responses"]');
+            if (!trigger) {
+                return;
+            }
+            event.preventDefault();
+            var participantId = Number(trigger.getAttribute("data-participant-id"));
+            if (!Number.isFinite(participantId)) {
+                return;
+            }
+            openResponsesModal(participantId);
         });
     }
 

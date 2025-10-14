@@ -637,3 +637,79 @@ def test_admin_participants_api_returns_responses_and_filters(client):
     search_payload = search_resp.get_json()
     assert search_payload["meta"]["total"] == 1
     assert search_payload["participants"][0]["compagnie"]["nom"] == "Beta Corp."
+
+
+def test_admin_can_update_participant_response(client):
+    conn = db_module.get_db_connection()
+    roles = seed_roles(conn)
+    admin_id = create_user(conn, "Admin", "Chef", "adminchef", roles["admin"])
+
+    gala_id = conn.execute(
+        "INSERT INTO gala (nom, annee, lieu, date_gala) VALUES (?, ?, ?, ?)",
+        ("Gala Test", 2026, "Quebec", "2026-06-01"),
+    ).lastrowid
+    categorie_id = conn.execute(
+        "INSERT INTO categorie (nom, description) VALUES (?, ?)",
+        ("Innovation", ""),
+    ).lastrowid
+    gala_cat_id = conn.execute(
+        "INSERT INTO gala_categorie (gala_id, categorie_id, ordre_affichage) VALUES (?, ?, ?)",
+        (gala_id, categorie_id, 1),
+    ).lastrowid
+
+    compagnie_id = conn.execute(
+        "INSERT INTO compagnie (nom, secteur, ville) VALUES (?, ?, ?)",
+        ("Alpha Inc.", "Tech", "Quebec"),
+    ).lastrowid
+    participant_id = conn.execute(
+        "INSERT INTO participant (compagnie_id, gala_categorie_id, segment_id) VALUES (?, ?, ?)",
+        (compagnie_id, gala_cat_id, None),
+    ).lastrowid
+
+    question_id = conn.execute(
+        "INSERT INTO question (gala_categorie_id, texte, ponderation) VALUES (?, ?, ?)",
+        (gala_cat_id, "Decrivez votre innovation", 1.0),
+    ).lastrowid
+
+    conn.execute(
+        "INSERT INTO reponse_participant (participant_id, question_id, contenu) VALUES (?, ?, ?)",
+        (participant_id, question_id, "Ancienne reponse"),
+    )
+    conn.commit()
+    conn.close()
+
+    admin_session(client, admin_id)
+
+    get_resp = client.get(f"/admin/api/participants/{participant_id}/responses")
+    assert get_resp.status_code == 200
+    payload = get_resp.get_json()
+    assert len(payload["questions"]) == 1
+    assert payload["questions"][0]["reponse"] == "Ancienne reponse"
+
+    patch_resp = client.patch(
+        f"/admin/api/participants/{participant_id}/questions/{question_id}",
+        json={"contenu": "Nouvelle valeur"},
+    )
+    assert patch_resp.status_code == 200
+
+    conn = db_module.get_db_connection()
+    row = conn.execute(
+        "SELECT contenu FROM reponse_participant WHERE participant_id = ? AND question_id = ?",
+        (participant_id, question_id),
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row["contenu"] == "Nouvelle valeur"
+
+    client.patch(
+        f"/admin/api/participants/{participant_id}/questions/{question_id}",
+        json={"contenu": ""},
+    )
+    conn = db_module.get_db_connection()
+    row = conn.execute(
+        "SELECT contenu FROM reponse_participant WHERE participant_id = ? AND question_id = ?",
+        (participant_id, question_id),
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row["contenu"] in (None, "")

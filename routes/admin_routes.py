@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, UTC
@@ -1324,6 +1324,9 @@ def _fetch_responses_by_participant(conn, participant_ids: List[int]) -> Dict[in
     return responses
 
 
+MAX_RESPONSE_LENGTH = 10000
+
+
 @admin_bp.route("/api/participants", methods=["GET"])
 def list_admin_participants():
     gala_id = request.args.get("gala_id", type=int)
@@ -1540,6 +1543,114 @@ def list_admin_participants():
             },
         }
     )
+
+
+@admin_bp.route("/api/participants/<int:participant_id>/responses", methods=["GET"])
+def get_participant_responses(participant_id: int):
+    conn = get_db_connection()
+    participant_row = conn.execute(
+        """
+        SELECT
+            p.id,
+            p.gala_categorie_id,
+            gc.gala_id,
+            comp.nom AS compagnie_nom,
+            comp.ville AS compagnie_ville,
+            comp.secteur AS compagnie_secteur,
+            c.nom AS categorie_nom
+        FROM participant AS p
+        JOIN compagnie AS comp ON comp.id = p.compagnie_id
+        JOIN gala_categorie AS gc ON gc.id = p.gala_categorie_id
+        JOIN categorie AS c ON c.id = gc.categorie_id
+        WHERE p.id = ?
+        """,
+        (participant_id,),
+    ).fetchone()
+    if not participant_row:
+        conn.close()
+        abort(404)
+
+    question_rows = conn.execute(
+        """
+        SELECT q.id, q.texte, q.ponderation, r.contenu AS reponse
+        FROM question AS q
+        LEFT JOIN reponse_participant AS r
+            ON r.question_id = q.id AND r.participant_id = ?
+        WHERE q.gala_categorie_id = ?
+        ORDER BY q.id ASC
+        """,
+        (participant_id, participant_row["gala_categorie_id"]),
+    ).fetchall()
+
+    questions_payload = [
+        {
+            "id": row["id"],
+            "texte": row["texte"],
+            "ponderation": row["ponderation"],
+            "reponse": row["reponse"],
+        }
+        for row in question_rows
+    ]
+
+    payload = {
+        "participant": {
+            "id": participant_row["id"],
+            "compagnie": participant_row["compagnie_nom"],
+            "ville": participant_row["compagnie_ville"],
+            "secteur": participant_row["compagnie_secteur"],
+        },
+        "category": {
+            "id": participant_row["gala_categorie_id"],
+            "nom": participant_row["categorie_nom"],
+        },
+        "questions": questions_payload,
+    }
+    conn.close()
+    return jsonify(payload)
+
+
+@admin_bp.route("/api/participants/<int:participant_id>/questions/<int:question_id>", methods=["PATCH"])
+def update_participant_response(participant_id: int, question_id: int):
+    payload = request.get_json(silent=True) or {}
+    contenu = payload.get("contenu")
+    if contenu is not None:
+        contenu = (contenu or "").strip()
+        if len(contenu) > MAX_RESPONSE_LENGTH:
+            return jsonify({"status": "error", "message": "Reponse trop longue."}), 400
+        if not contenu:
+            contenu = None
+
+    conn = get_db_connection()
+    participant_row = conn.execute(
+        "SELECT id, gala_categorie_id FROM participant WHERE id = ?",
+        (participant_id,),
+    ).fetchone()
+    if not participant_row:
+        conn.close()
+        abort(404)
+
+    question_row = conn.execute(
+        "SELECT id FROM question WHERE id = ? AND gala_categorie_id = ?",
+        (question_id, participant_row["gala_categorie_id"]),
+    ).fetchone()
+    if not question_row:
+        conn.close()
+        abort(404)
+
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO reponse_participant (participant_id, question_id, contenu)
+        VALUES (?, ?, ?)
+        ON CONFLICT(participant_id, question_id)
+        DO UPDATE SET contenu = excluded.contenu
+        """,
+        (participant_id, question_id, contenu),
+    )
+    conn.commit()
+    conn.close()
+
+    return jsonify({"status": "ok", "question_id": question_id, "contenu": contenu})
 
 
 
