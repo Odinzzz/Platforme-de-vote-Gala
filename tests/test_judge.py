@@ -132,7 +132,7 @@ def test_judge_dashboard_summary_and_participant_flow(client):
 
     patch_resp = client.patch(
         f"/judge/api/galas/{gala_id}/categories/{gala_cat_id}/participants/{participant_a}/questions/{question_1}",
-        json={"valeur": 8, "commentaire": "Solide"},
+        json={"valeur": 6, "commentaire": "Solide"},
     )
     assert patch_resp.status_code == 200
     check_conn = db_module.get_db_connection()
@@ -142,20 +142,20 @@ def test_judge_dashboard_summary_and_participant_flow(client):
     ).fetchone()
     check_conn.close()
     assert note_row is not None
-    assert note_row["valeur"] == 8
+    assert note_row["valeur"] == 6
     assert note_row["commentaire"] == "Solide"
 
     client.patch(
         f"/judge/api/galas/{gala_id}/categories/{gala_cat_id}/participants/{participant_a}/questions/{question_2}",
-        json={"valeur": 7},
-    )
-    client.patch(
-        f"/judge/api/galas/{gala_id}/categories/{gala_cat_id}/participants/{participant_b}/questions/{question_1}",
         json={"valeur": 5},
     )
     client.patch(
+        f"/judge/api/galas/{gala_id}/categories/{gala_cat_id}/participants/{participant_b}/questions/{question_1}",
+        json={"valeur": 4},
+    )
+    client.patch(
         f"/judge/api/galas/{gala_id}/categories/{gala_cat_id}/participants/{participant_b}/questions/{question_2}",
-        json={"valeur": 6},
+        json={"valeur": 5},
     )
 
 
@@ -284,7 +284,7 @@ def test_judge_narratif_questions_shared_across_categories(client):
 
     patch_resp = client.patch(
         f"/judge/api/galas/{gala_id}/categories/{gala_cat_innov}/participants/{participant_innov}/questions/{question_narratif}",
-        json={"valeur": 9, "target_participant_id": participant_narratif},
+        json={"valeur": 6, "target_participant_id": participant_narratif},
     )
     assert patch_resp.status_code == 200
 
@@ -296,7 +296,7 @@ def test_judge_narratif_questions_shared_across_categories(client):
     check_conn.close()
     assert note_row is not None
     assert note_row["participant_id"] == participant_narratif
-    assert note_row["valeur"] == 9
+    assert note_row["valeur"] == 6
 
     detail_repr_resp = client.get(
         f"/judge/api/galas/{gala_id}/categories/{gala_cat_repr}/participants/{participant_repr}"
@@ -306,4 +306,30 @@ def test_judge_narratif_questions_shared_across_categories(client):
     shared_again = next(
         item for item in detail_repr["questions"] if item.get("source") == "narratif"
     )
-    assert shared_again["note"] == 9
+    assert shared_again["note"] == 6
+
+    favorite_resp = client.post(
+        f"/judge/api/galas/{gala_id}/categories/{gala_cat_innov}/participants/{participant_innov}/favorite"
+    )
+    assert favorite_resp.status_code == 200
+    favorite_payload = favorite_resp.get_json()
+    assert favorite_payload["favorite"]["selected"] is True
+    assert favorite_payload["favorite"]["participant_id"] == participant_innov
+
+    detail_innov_again = client.get(
+        f"/judge/api/galas/{gala_id}/categories/{gala_cat_innov}/participants/{participant_innov}"
+    ).get_json()
+    assert detail_innov_again["favorite"]["selected"] is True
+
+    detail_repr_again = client.get(
+        f"/judge/api/galas/{gala_id}/categories/{gala_cat_repr}/participants/{participant_repr}"
+    ).get_json()
+    assert detail_repr_again["favorite"]["selected"] is False
+    assert detail_repr_again["favorite"]["participant_id"] == participant_innov
+
+    remove_resp = client.delete(
+        f"/judge/api/galas/{gala_id}/categories/{gala_cat_innov}/participants/{participant_innov}/favorite"
+    )
+    assert remove_resp.status_code == 200
+    remove_payload = remove_resp.get_json()
+    assert remove_payload["favorite"]["selected"] is False

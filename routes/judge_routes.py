@@ -121,6 +121,14 @@ def _load_questions_with_notes(
     ).fetchall()
 
 
+def _get_coup_de_coeur(conn, juge_id: int, gala_id: int) -> Optional[int]:
+    row = conn.execute(
+        "SELECT participant_id FROM coup_de_coeur WHERE juge_id = ? AND gala_id = ?",
+        (juge_id, gala_id),
+    ).fetchone()
+    return row["participant_id"] if row else None
+
+
 def _compute_progress(question_count: int, participant_ids: List[int], note_counts: Dict[int, int]) -> Tuple[float, int, int, int]:
     total_required = question_count * len(participant_ids)
     if total_required == 0:
@@ -430,6 +438,10 @@ def api_list_participants(gala_id: int, gala_categorie_id: int):
             }
         )
 
+    favorite_participant_id = _get_coup_de_coeur(conn, juge_id, gala_id)
+    locked_flag = _is_gala_locked(conn, gala_id)
+    submitted_flag = _has_submitted(conn, juge_id, gala_id)
+
     response = {
         "gala": {
             "id": category_row["gala_id"],
@@ -564,6 +576,10 @@ def api_participant_detail(gala_id: int, gala_categorie_id: int, participant_id:
 
     percent = round((counted_completed / counted_total) * 100, 1) if counted_total else 0.0
 
+    favorite_participant_id = _get_coup_de_coeur(conn, juge_id, gala_id)
+    locked_flag = _is_gala_locked(conn, gala_id)
+    submitted_flag = _has_submitted(conn, juge_id, gala_id)
+
     response = {
         "gala": {
             "id": category_row["gala_id"],
@@ -589,8 +605,13 @@ def api_participant_detail(gala_id: int, gala_categorie_id: int, participant_id:
             "total": counted_total,
             "extra": total_questions - counted_total,
         },
-        "locked": _is_gala_locked(conn, gala_id),
-        "submitted": _has_submitted(conn, juge_id, gala_id),
+        "favorite": {
+            "selected": favorite_participant_id == participant_id,
+            "participant_id": favorite_participant_id,
+            "allowed": not (locked_flag or submitted_flag),
+        },
+        "locked": locked_flag,
+        "submitted": submitted_flag,
     }
     conn.close()
     return jsonify(response)
@@ -641,13 +662,13 @@ def api_update_note(gala_id: int, gala_categorie_id: int, participant_id: int, q
             valeur = None
         else:
             try:
-                valeur = float(valeur)
+                valeur = int(valeur)
             except (TypeError, ValueError):
                 conn.close()
                 return jsonify({"status": "error", "message": "Note invalide."}), 400
-            if valeur < 0 or valeur > 10:
+            if valeur < 1 or valeur > 6:
                 conn.close()
-                return jsonify({"status": "error", "message": "La note doit etre comprise entre 0 et 10."}), 400
+                return jsonify({"status": "error", "message": "La note doit etre comprise entre 1 et 6."}), 400
     if has_commentaire:
         if commentaire is not None and commentaire != "":
             if not isinstance(commentaire, str):
@@ -685,6 +706,8 @@ def api_update_note(gala_id: int, gala_categorie_id: int, participant_id: int, q
     ).fetchone()
 
     valeur_to_save = valeur if has_valeur else (existing["valeur"] if existing else None)
+    if valeur_to_save is not None:
+        valeur_to_save = int(valeur_to_save)
     commentaire_to_save = commentaire if has_commentaire else (existing["commentaire"] if existing else None)
 
     conn.execute(
@@ -714,6 +737,103 @@ def api_update_note(gala_id: int, gala_categorie_id: int, participant_id: int, q
                 "target_participant_id": target_participant_id,
             },
             "saved_at": saved_at,
+        }
+    )
+
+
+@judge_bp.route(
+    "/api/galas/<int:gala_id>/categories/<int:gala_categorie_id>/participants/<int:participant_id>/favorite",
+    methods=["POST"],
+)
+def api_set_favorite(gala_id: int, gala_categorie_id: int, participant_id: int):
+    user = _require_judge_user()
+    conn = get_db_connection()
+    juge_id = _get_judge_id(conn, user["id"])
+    _ensure_category_access(conn, juge_id, gala_id, gala_categorie_id)
+
+    participant_exists = conn.execute(
+        "SELECT 1 FROM participant WHERE id = ? AND gala_categorie_id = ?",
+        (participant_id, gala_categorie_id),
+    ).fetchone()
+    if not participant_exists:
+        conn.close()
+        abort(404)
+
+    if _is_gala_locked(conn, gala_id):
+        conn.close()
+        return jsonify({"status": "error", "message": "Ce gala est verrouille."}), 409
+
+    if _has_submitted(conn, juge_id, gala_id):
+        conn.close()
+        return jsonify({"status": "error", "message": "Vous avez deja soumis vos evaluations pour ce gala."}), 409
+
+    conn.execute(
+        """
+        INSERT INTO coup_de_coeur (juge_id, gala_id, participant_id)
+        VALUES (?, ?, ?)
+        ON CONFLICT(juge_id, gala_id)
+        DO UPDATE SET participant_id = excluded.participant_id, created_at = CURRENT_TIMESTAMP
+        """,
+        (juge_id, gala_id, participant_id),
+    )
+    conn.commit()
+
+    favorite_participant_id = _get_coup_de_coeur(conn, juge_id, gala_id)
+    allowed_flag = not (_is_gala_locked(conn, gala_id) or _has_submitted(conn, juge_id, gala_id))
+    conn.close()
+    return jsonify(
+        {
+            "status": "ok",
+            "favorite": {
+                "selected": favorite_participant_id == participant_id,
+                "participant_id": favorite_participant_id,
+                "allowed": allowed_flag,
+            },
+        }
+    )
+
+
+@judge_bp.route(
+    "/api/galas/<int:gala_id>/categories/<int:gala_categorie_id>/participants/<int:participant_id>/favorite",
+    methods=["DELETE"],
+)
+def api_remove_favorite(gala_id: int, gala_categorie_id: int, participant_id: int):
+    user = _require_judge_user()
+    conn = get_db_connection()
+    juge_id = _get_judge_id(conn, user["id"])
+    _ensure_category_access(conn, juge_id, gala_id, gala_categorie_id)
+
+    participant_exists = conn.execute(
+        "SELECT 1 FROM participant WHERE id = ? AND gala_categorie_id = ?",
+        (participant_id, gala_categorie_id),
+    ).fetchone()
+    if not participant_exists:
+        conn.close()
+        abort(404)
+
+    if _is_gala_locked(conn, gala_id):
+        conn.close()
+        return jsonify({"status": "error", "message": "Ce gala est verrouille."}), 409
+
+    if _has_submitted(conn, juge_id, gala_id):
+        conn.close()
+        return jsonify({"status": "error", "message": "Vous avez deja soumis vos evaluations pour ce gala."}), 409
+
+    conn.execute(
+        "DELETE FROM coup_de_coeur WHERE juge_id = ? AND gala_id = ?",
+        (juge_id, gala_id),
+    )
+    conn.commit()
+    allowed_flag = not (_is_gala_locked(conn, gala_id) or _has_submitted(conn, juge_id, gala_id))
+    conn.close()
+    return jsonify(
+        {
+            "status": "ok",
+            "favorite": {
+                "selected": False,
+                "participant_id": None,
+                "allowed": allowed_flag,
+            },
         }
     )
 

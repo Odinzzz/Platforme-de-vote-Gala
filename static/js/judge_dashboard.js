@@ -11,6 +11,7 @@
         galaSummary: null,
         categoryData: null,
         participantData: null,
+        favoriteParticipantId: null,
         currentQuestionIndex: 0,
         saving: false,
     };
@@ -31,6 +32,39 @@
         soumis: "text-bg-info",
         non_disponible: "text-bg-secondary",
     };
+
+    const RATING_OPTIONS = [
+        {
+            value: 1,
+            title: "1 - Modeste",
+            description: "Reponses tres partielles ou sans structure. Peu d'elements concrets.",
+        },
+        {
+            value: 2,
+            title: "2 - Faible",
+            description: "Criteres abordes superficiellement avec peu de preuves a l'appui.",
+        },
+        {
+            value: 3,
+            title: "3 - Acceptable",
+            description: "Les criteres de base sont couverts mais l'analyse manque de profondeur.",
+        },
+        {
+            value: 4,
+            title: "4 - Bon",
+            description: "Reponses structurees, claires et refletant une demarche reflechie.",
+        },
+        {
+            value: 5,
+            title: "5 - Tres bon",
+            description: "Qualite remarquable et dossier convaincant qui se distingue.",
+        },
+        {
+            value: 6,
+            title: "6 - Exceptionnel",
+            description: "Impact fort, dossier inspire et depasse largement les attentes.",
+        },
+    ];
 
     function escapeHtml(value) {
         if (value === null || value === undefined) {
@@ -449,9 +483,14 @@
             '      <h2 class="h5 mb-1" id="judgeParticipantTitle">' + escapeHtml(data.participant.compagnie || 'Participant') + '</h2>',
             '      <p class="text-muted mb-0" id="judgeParticipantMeta">' + participantMetaLabel + '</p>',
             '    </div>',
-            '    <div class="btn-group" role="group">',
-            '      <button class="btn btn-outline-secondary" id="judgeQuestionPrev">Precedent</button>',
-            '      <button class="btn btn-outline-secondary" id="judgeQuestionNext">Suivant</button>',
+            '    <div class="d-flex flex-column flex-md-row align-items-stretch align-items-md-center gap-2">',
+            '      <button class="btn btn-outline-warning" type="button" id="judgeFavoriteToggle">',
+            '        <span class="favorite-label">Coup de coeur</span>',
+            '      </button>',
+            '      <div class="btn-group" role="group">',
+            '        <button class="btn btn-outline-secondary" id="judgeQuestionPrev">Precedent</button>',
+            '        <button class="btn btn-outline-secondary" id="judgeQuestionNext">Suivant</button>',
+            '      </div>',
             '    </div>',
             '  </div>',
             '  <hr>',
@@ -468,6 +507,72 @@
         const prevButton = card.querySelector('#judgeQuestionPrev');
         const nextButton = card.querySelector('#judgeQuestionNext');
         const questionContainer = card.querySelector('#judgeQuestionContainer');
+        const favoriteButton = card.querySelector('#judgeFavoriteToggle');
+        const favoriteLabel = favoriteButton ? favoriteButton.querySelector('.favorite-label') : null;
+
+        function isFavoriteAllowed() {
+            const allowedFlag = data.favorite ? data.favorite.allowed !== false : !(locked || submitted);
+            return !locked && !submitted && allowedFlag;
+        }
+
+        function syncFavoriteButton() {
+            if (!favoriteButton) {
+                return;
+            }
+            const selected = state.favoriteParticipantId && Number(state.favoriteParticipantId) === Number(data.participant.id);
+            const allowed = isFavoriteAllowed();
+            favoriteButton.disabled = !allowed;
+            favoriteButton.classList.remove('btn-outline-warning', 'btn-warning', 'btn-outline-secondary', 'btn-secondary');
+            if (!allowed) {
+                favoriteButton.classList.add(selected ? 'btn-secondary' : 'btn-outline-secondary');
+            } else {
+                favoriteButton.classList.add(selected ? 'btn-warning' : 'btn-outline-warning');
+            }
+            const labelText = selected ? 'Retirer coup de coeur' : 'Choisir coup de coeur';
+            if (favoriteLabel) {
+                favoriteLabel.textContent = labelText;
+            } else {
+                favoriteButton.textContent = labelText;
+            }
+        }
+
+        async function toggleFavorite() {
+            if (!favoriteButton || !isFavoriteAllowed()) {
+                return;
+            }
+            const alreadySelected = state.favoriteParticipantId && Number(state.favoriteParticipantId) === Number(data.participant.id);
+            const method = alreadySelected ? 'DELETE' : 'POST';
+            favoriteButton.disabled = true;
+            try {
+                const response = await fetch('/judge/api/galas/' + state.galaId + '/categories/' + state.categoryId + '/participants/' + state.participantId + '/favorite', {
+                    method: method,
+                });
+                const payload = await response.json().catch(function () { return null; });
+                if (!response.ok || !payload || payload.status !== 'ok') {
+                    const message = payload && payload.message ? payload.message : 'Action impossible.';
+                    showFeedback('error', message);
+                    return;
+                }
+                const favoriteInfo = payload.favorite || {};
+                state.favoriteParticipantId = favoriteInfo.participant_id || null;
+                data.favorite = favoriteInfo;
+                syncFavoriteButton();
+                const successMessage = favoriteInfo.selected ? 'Coup de coeur enregistre.' : 'Coup de coeur retire.';
+                showFeedback('success', successMessage);
+            } catch (error) {
+                showFeedback('error', 'Erreur reseau lors de la mise a jour du coup de coeur.');
+            } finally {
+                syncFavoriteButton();
+            }
+        }
+
+        syncFavoriteButton();
+
+        if (favoriteButton) {
+            favoriteButton.addEventListener('click', function () {
+                toggleFavorite();
+            });
+        }
 
         function showQuestionStatus(message, isError) {
             const statusEl = card.querySelector('#judgeQuestionSaveStatus');
@@ -594,7 +699,9 @@
                 return;
             }
             if (notePayload && Object.prototype.hasOwnProperty.call(notePayload, 'valeur')) {
-                questionMeta.note = notePayload.valeur;
+                questionMeta.note = notePayload.valeur !== null && notePayload.valeur !== undefined
+                    ? Number(notePayload.valeur)
+                    : null;
             }
             if (notePayload && Object.prototype.hasOwnProperty.call(notePayload, 'commentaire')) {
                 questionMeta.commentaire = notePayload.commentaire;
@@ -627,6 +734,21 @@
             const sharedHint = question.shared
                 ? '<p class="text-info small mb-2">Question narrative commune a toutes les categories (note unique).</p>'
                 : '';
+            const ratingOptionsHtml = RATING_OPTIONS.map(function (option) {
+                const isActive = Number(question.note) === Number(option.value);
+                const classes = ['btn', 'text-start', 'w-100'];
+                if (disabled) {
+                    classes.push(isActive ? 'btn-secondary' : 'btn-outline-secondary');
+                } else {
+                    classes.push(isActive ? 'btn-primary' : 'btn-outline-primary');
+                }
+                classes.push('mb-2');
+                return '<button type="button" class="' + classes.join(' ') + '" data-note-value="' + option.value + '" ' + (disabled ? 'disabled' : '') + '>' +
+                    '<div><strong>' + escapeHtml(option.title) + '</strong></div>' +
+                    '<div class="small text-muted">' + escapeHtml(option.description) + '</div>' +
+                    '</button>';
+            }).join('');
+
             questionContainer.innerHTML = [
                 '<div class="d-flex justify-content-between align-items-center mb-3">',
                 '  <div>',
@@ -642,9 +764,11 @@
                 '  <p class="mb-0">' + (question.reponse ? escapeHtml(question.reponse) : '<span class="text-muted">Aucune reponse</span>') + '</p>',
                 '</div>',
                 '<div class="row g-3">',
-                '  <div class="col-sm-4">',
-                '    <label class="form-label" for="judgeQuestionNote">Note (sur 10)</label>',
-                '    <input type="number" class="form-control" id="judgeQuestionNote" min="0" max="10" step="0.5" value="' + (question.note !== null && question.note !== undefined ? question.note : '') + '" ' + (disabled ? 'disabled' : '') + '>',
+                '  <div class="col-12">',
+                '    <h4 class="h6 text-muted mb-2">Evaluation (1 a 6)</h4>',
+                '    <div class="rating-options d-grid gap-2" id="judgeRatingOptions">',
+                ratingOptionsHtml,
+                '    </div>',
                 '  </div>',
                 '  <div class="col-12">',
                 '    <label class="form-label" for="judgeQuestionComment">Commentaire</label>',
@@ -662,19 +786,29 @@
             }
 
             if (!disabled) {
-                const noteInput = questionContainer.querySelector('#judgeQuestionNote');
-                const commentInput = questionContainer.querySelector('#judgeQuestionComment');
-                if (noteInput) {
-                    noteInput.addEventListener('change', function () {
-                        const raw = noteInput.value;
-                        const payload = raw === '' ? null : Number(raw);
-                        if (payload === null || Number.isNaN(payload)) {
+                const ratingButtons = questionContainer.querySelectorAll('#judgeRatingOptions [data-note-value]');
+                ratingButtons.forEach(function (button) {
+                    button.addEventListener('click', function () {
+                        const value = Number(button.getAttribute('data-note-value'));
+                        if (!Number.isFinite(value) || value < 1 || value > 6) {
                             showQuestionStatus('Note invalide', true);
                             return;
                         }
-                        persistNote(question.id, { valeur: payload });
+                        ratingButtons.forEach(function (btn) {
+                            const btnValue = Number(btn.getAttribute('data-note-value'));
+                            btn.classList.remove('btn-primary', 'btn-outline-primary', 'btn-secondary', 'btn-outline-secondary');
+                            if (btnValue === value) {
+                                btn.classList.add('btn-primary');
+                            } else {
+                                btn.classList.add('btn-outline-primary');
+                            }
+                        });
+                        question.note = value;
+                        recalculateParticipantMetrics();
+                        persistNote(question.id, { valeur: value });
                     });
-                }
+                });
+                const commentInput = questionContainer.querySelector('#judgeQuestionComment');
                 if (commentInput) {
                     commentInput.addEventListener('blur', function () {
                         const value = commentInput.value.trim();
@@ -753,6 +887,16 @@
             throw new Error(message);
         }
         const payload = await response.json();
+        if (!payload.favorite) {
+            payload.favorite = {
+                selected: false,
+                participant_id: null,
+                allowed: !(payload.locked || payload.submitted),
+            };
+        } else if (!Object.prototype.hasOwnProperty.call(payload.favorite, "allowed")) {
+            payload.favorite.allowed = !(payload.locked || payload.submitted);
+        }
+        state.favoriteParticipantId = payload.favorite && payload.favorite.participant_id ? payload.favorite.participant_id : null;
         state.participantData = payload;
         state.participantId = participantId;
         state.currentQuestionIndex = 0;

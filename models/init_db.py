@@ -139,7 +139,7 @@ CREATE TABLE IF NOT EXISTS note (
     juge_id INTEGER NOT NULL,
     participant_id INTEGER NOT NULL,
     question_id INTEGER NOT NULL,
-    valeur REAL CHECK(valeur >= 0),
+    valeur INTEGER CHECK(valeur BETWEEN 1 AND 6),
     commentaire TEXT,
     FOREIGN KEY (juge_id) REFERENCES juge(id) ON DELETE CASCADE,
     FOREIGN KEY (participant_id) REFERENCES participant(id) ON DELETE CASCADE,
@@ -173,6 +173,19 @@ CREATE TABLE IF NOT EXISTS juge_gala_submission (
     FOREIGN KEY (juge_id) REFERENCES juge(id) ON DELETE CASCADE,
     FOREIGN KEY (gala_id) REFERENCES gala(id) ON DELETE CASCADE,
     UNIQUE (juge_id, gala_id)
+);
+
+CREATE TABLE IF NOT EXISTS coup_de_coeur (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    juge_id INTEGER NOT NULL,
+    gala_id INTEGER NOT NULL,
+    participant_id INTEGER NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (juge_id) REFERENCES juge(id) ON DELETE CASCADE,
+    FOREIGN KEY (gala_id) REFERENCES gala(id) ON DELETE CASCADE,
+    FOREIGN KEY (participant_id) REFERENCES participant(id) ON DELETE CASCADE,
+    UNIQUE (juge_id, gala_id),
+    UNIQUE (juge_id, participant_id)
 );
 
 
