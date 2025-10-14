@@ -8,6 +8,5 @@ venv/
 .gitignore
 Archive/
 *.csv
-*.db
 node_modules/
 .dockerignore
