@@ -88,7 +88,7 @@ docker logs -f gala
 Puis dans ton navigateur :
 
 ```
-http://TON-IP-PUBLIQUE:5000
+http://69.62.70.222:5000/
 ```
 
 ---
