@@ -39,6 +39,7 @@
                         <p class="text-muted small mb-0" id="participantsSubtitle">Selectionnez un gala pour affiner les resultats.</p>
                     </div>
                     <div class="d-flex align-items-center gap-2">
+                        <button class="btn btn-primary btn-sm" type="button" id="participantsAddButton">Ajouter un participant</button>
                         <div class="btn-group" role="group" aria-label="Switcher de vue">
                             <button class="btn btn-outline-secondary btn-sm active" type="button" id="participantsViewCardsButton" data-view="cards">Cartes</button>
                             <button class="btn btn-outline-secondary btn-sm" type="button" id="participantsViewTableButton" data-view="table">Tableau</button>
@@ -99,6 +100,74 @@
             <div class="modal-footer">
                 <button type="button" class="btn btn-light" data-bs-dismiss="modal">Fermer</button>
                 <button type="button" class="btn btn-primary" id="participantResponsesSaveButton">Enregistrer</button>
+            </div>
+        </div>
+    </div>
+</div>
+<div class="modal fade" id="participantCreateModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="h5 modal-title">Ajouter un participant</h2>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert d-none" id="participantCreateFeedback" role="alert"></div>
+                <form id="participantCreateForm" novalidate>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label" for="participantCreateGalaSelect">Gala</label>
+                            <select class="form-select" id="participantCreateGalaSelect" required>
+                                <option value="">Selectionnez un gala</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="participantCreateCategorieSelect">Categorie</label>
+                            <select class="form-select" id="participantCreateCategorieSelect" required disabled>
+                                <option value="">Choisissez un gala pour afficher les categories</option>
+                            </select>
+                        </div>
+                        <div class="col-12">
+                            <hr class="text-muted">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="participantCreateCompanyName">Nom de l'entreprise</label>
+                            <input class="form-control" id="participantCreateCompanyName" name="compagnie_nom" type="text" required placeholder="Entreprise ABC">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="participantCreateCompanySecteur">Secteur (optionnel)</label>
+                            <input class="form-control" id="participantCreateCompanySecteur" name="compagnie_secteur" type="text" placeholder="Technologie, services...">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="participantCreateCompanyVille">Ville (optionnel)</label>
+                            <input class="form-control" id="participantCreateCompanyVille" name="compagnie_ville" type="text">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="participantCreateCompanyCourriel">Courriel (optionnel)</label>
+                            <input class="form-control" id="participantCreateCompanyCourriel" name="compagnie_courriel" type="email" placeholder="contact@entreprise.ca">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="participantCreateCompanyTelephone">Telephone (optionnel)</label>
+                            <input class="form-control" id="participantCreateCompanyTelephone" name="compagnie_telephone" type="text">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="participantCreateCompanySiteWeb">Site web (optionnel)</label>
+                            <input class="form-control" id="participantCreateCompanySiteWeb" name="compagnie_site_web" type="url" placeholder="https://">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="participantCreateCompanyResponsable">Nom du responsable (optionnel)</label>
+                            <input class="form-control" id="participantCreateCompanyResponsable" name="compagnie_responsable" type="text">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="participantCreateCompanyTitre">Titre du responsable (optionnel)</label>
+                            <input class="form-control" id="participantCreateCompanyTitre" name="compagnie_responsable_titre" type="text">
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">Annuler</button>
+                <button type="submit" class="btn btn-primary" id="participantCreateSubmitButton" form="participantCreateForm">Ajouter</button>
             </div>
         </div>
     </div>

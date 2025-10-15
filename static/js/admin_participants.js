@@ -26,6 +26,18 @@
         responsesModal = new bootstrap.Modal(responsesModalEl);
     }
 
+    const addParticipantButton = document.getElementById("participantsAddButton");
+    const createModalEl = document.getElementById("participantCreateModal");
+    const createForm = document.getElementById("participantCreateForm");
+    const createFeedback = document.getElementById("participantCreateFeedback");
+    const createGalaSelect = document.getElementById("participantCreateGalaSelect");
+    const createCategorieSelect = document.getElementById("participantCreateCategorieSelect");
+    const createSubmitButton = document.getElementById("participantCreateSubmitButton");
+    let createModal = null;
+    if (createModalEl && typeof bootstrap !== "undefined") {
+        createModal = new bootstrap.Modal(createModalEl);
+    }
+
     if (!galaSelect || !categorieSelect || !cardsContainer) {
         return;
     }
@@ -106,6 +118,27 @@
         }
         responsesModalAlert.className = "alert " + bootstrapClass;
         responsesModalAlert.textContent = message;
+    }
+
+    function showCreateFeedback(type, message) {
+        if (!createFeedback) {
+            return;
+        }
+        createFeedback.className = "alert d-none";
+        createFeedback.textContent = "";
+        if (!type || !message) {
+            return;
+        }
+        var bootstrapClass = "alert-info";
+        if (type === "success") {
+            bootstrapClass = "alert-success";
+        } else if (type === "danger") {
+            bootstrapClass = "alert-danger";
+        } else if (type === "warning") {
+            bootstrapClass = "alert-warning";
+        }
+        createFeedback.className = "alert " + bootstrapClass;
+        createFeedback.textContent = message;
     }
 
     function resetResponsesModal() {
@@ -349,6 +382,209 @@ function normalizeId(value) {
             categorieSelect.value = "";
         }
         state.selectedCategorieId = normalizeId(categorieSelect.value);
+    }
+
+    function resetCreateModal() {
+        showCreateFeedback(null, "");
+        if (createForm) {
+            createForm.reset();
+        }
+        if (createGalaSelect) {
+            createGalaSelect.innerHTML = '<option value="">Selectionnez un gala</option>';
+            createGalaSelect.disabled = false;
+        }
+        if (createCategorieSelect) {
+            createCategorieSelect.innerHTML = '<option value="">Choisissez un gala pour afficher les categories</option>';
+            createCategorieSelect.disabled = true;
+        }
+    }
+
+    function populateCreateGalaOptions() {
+        if (!createGalaSelect) {
+            return;
+        }
+        const galas = Array.isArray(state.filters.galas) ? state.filters.galas : [];
+        createGalaSelect.innerHTML = "";
+        if (!galas.length) {
+            createGalaSelect.disabled = true;
+            const option = document.createElement("option");
+            option.value = "";
+            option.textContent = "Aucun gala disponible";
+            createGalaSelect.appendChild(option);
+            if (createCategorieSelect) {
+                createCategorieSelect.innerHTML = '<option value="">Aucune categorie disponible</option>';
+                createCategorieSelect.disabled = true;
+            }
+            return;
+        }
+        createGalaSelect.disabled = false;
+        const defaultOption = document.createElement("option");
+        defaultOption.value = "";
+        defaultOption.textContent = "Selectionnez un gala";
+        createGalaSelect.appendChild(defaultOption);
+        let initialGalaId = state.selectedGalaId || null;
+        const hasSelected = galas.some(function (gala) {
+            return gala && initialGalaId !== null && gala.id === initialGalaId;
+        });
+        if (!hasSelected) {
+            initialGalaId = galas[0] ? galas[0].id : null;
+        }
+        galas.forEach(function (gala) {
+            if (!gala) {
+                return;
+            }
+            const option = document.createElement("option");
+            option.value = String(gala.id);
+            const labelParts = [];
+            if (gala.annee) {
+                labelParts.push(gala.annee);
+            }
+            if (gala.nom) {
+                labelParts.push(gala.nom);
+            }
+            option.textContent = labelParts.join(" - ") || ("Gala " + gala.id);
+            createGalaSelect.appendChild(option);
+        });
+        createGalaSelect.value = initialGalaId ? String(initialGalaId) : "";
+        populateCreateCategorieOptions();
+    }
+
+    function populateCreateCategorieOptions() {
+        if (!createCategorieSelect) {
+            return;
+        }
+        const galaId = createGalaSelect ? normalizeId(createGalaSelect.value) : null;
+        const gala = galaId ? findGalaById(galaId) : null;
+        const categories = gala && Array.isArray(gala.categories) ? gala.categories : [];
+        createCategorieSelect.innerHTML = "";
+        if (!categories.length) {
+            createCategorieSelect.disabled = true;
+            const option = document.createElement("option");
+            option.value = "";
+            option.textContent = gala ? "Aucune categorie disponible" : "Choisissez un gala pour afficher les categories";
+            createCategorieSelect.appendChild(option);
+            return;
+        }
+        createCategorieSelect.disabled = false;
+        const defaultOption = document.createElement("option");
+        defaultOption.value = "";
+        defaultOption.textContent = "Selectionnez une categorie";
+        createCategorieSelect.appendChild(defaultOption);
+        let initialCategorieId = state.selectedCategorieId || null;
+        let hasSelected = false;
+        categories.forEach(function (category) {
+            if (!category) {
+                return;
+            }
+            const option = document.createElement("option");
+            option.value = String(category.id);
+            option.textContent = category.nom || ("Categorie " + category.id);
+            if (initialCategorieId !== null && category.id === initialCategorieId) {
+                hasSelected = true;
+            }
+            createCategorieSelect.appendChild(option);
+        });
+        if (!hasSelected) {
+            createCategorieSelect.value = "";
+        } else {
+            createCategorieSelect.value = String(initialCategorieId);
+        }
+    }
+
+    function openCreateParticipantModal() {
+        if (!createModal || !createForm) {
+            return;
+        }
+        showCreateFeedback(null, "");
+        createForm.reset();
+        populateCreateGalaOptions();
+        populateCreateCategorieOptions();
+        createModal.show();
+        const focusTarget = createForm.querySelector("#participantCreateCompanyName");
+        if (focusTarget) {
+            setTimeout(function () {
+                focusTarget.focus();
+            }, 150);
+        }
+    }
+
+    function handleCreateParticipantSubmit(event) {
+        if (event) {
+            event.preventDefault();
+        }
+        if (!createForm || !createCategorieSelect) {
+            return;
+        }
+        const selectedCategorieId = normalizeId(createCategorieSelect.value);
+        if (!selectedCategorieId) {
+            showCreateFeedback("danger", "Selectionnez une categorie.");
+            return;
+        }
+        const formData = new FormData(createForm);
+        const compagnieNom = (formData.get("compagnie_nom") || "").toString().trim();
+        if (!compagnieNom) {
+            showCreateFeedback("danger", "Le nom de l'entreprise est requis.");
+            return;
+        }
+        const payload = {
+            gala_categorie_id: selectedCategorieId,
+            compagnie: {
+                nom: compagnieNom,
+            },
+        };
+        const optionalMap = {
+            secteur: "compagnie_secteur",
+            ville: "compagnie_ville",
+            courriel: "compagnie_courriel",
+            telephone: "compagnie_telephone",
+            responsable_nom: "compagnie_responsable",
+            responsable_titre: "compagnie_responsable_titre",
+            site_web: "compagnie_site_web",
+        };
+        Object.keys(optionalMap).forEach(function (key) {
+            const field = optionalMap[key];
+            const value = (formData.get(field) || "").toString().trim();
+            if (value) {
+                payload.compagnie[key] = value;
+            }
+        });
+
+        showCreateFeedback(null, "");
+        if (createSubmitButton) {
+            createSubmitButton.disabled = true;
+        }
+
+        fetch("/admin/api/participants", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        })
+            .then(function (response) {
+                return response.json().then(function (data) {
+                    return { ok: response.ok, data: data };
+                }).catch(function () {
+                    return { ok: response.ok, data: null };
+                });
+            })
+            .then(function (result) {
+                if (!result.ok) {
+                    const message = result.data && result.data.message ? result.data.message : "Impossible d'ajouter le participant.";
+                    throw new Error(message);
+                }
+                if (createModal) {
+                    createModal.hide();
+                }
+                fetchParticipants();
+            })
+            .catch(function (error) {
+                console.error("admin_participants create error", error);
+                showCreateFeedback("danger", error.message || "Impossible d'ajouter le participant.");
+            })
+            .finally(function () {
+                if (createSubmitButton) {
+                    createSubmitButton.disabled = false;
+                }
+            });
     }
 
     function updateSubtitle() {
@@ -714,6 +950,8 @@ function normalizeId(value) {
             state.selectedCategorieId = normalizeId(selected.categorie_id);
             state.search = selected.q || "";
             state.participants = Array.isArray(payload?.participants) ? payload.participants : [];
+            populateCreateGalaOptions();
+            populateCreateCategorieOptions();
             syncControls();
             applyClientFilters();
         } catch (error) {
@@ -804,6 +1042,36 @@ function normalizeId(value) {
             state.editingParticipantId = null;
             state.currentResponses = null;
             resetResponsesModal();
+        });
+    }
+
+    if (createModalEl) {
+        createModalEl.addEventListener("hidden.bs.modal", function () {
+            resetCreateModal();
+        });
+    }
+
+    if (createGalaSelect) {
+        createGalaSelect.addEventListener("change", function () {
+            populateCreateCategorieOptions();
+        });
+    }
+
+    if (createForm) {
+        createForm.addEventListener("submit", handleCreateParticipantSubmit);
+    }
+
+    if (addParticipantButton) {
+        addParticipantButton.addEventListener("click", function () {
+            if (!Array.isArray(state.filters.galas) || !state.filters.galas.length) {
+                resetCreateModal();
+                showCreateFeedback("warning", "Aucun gala disponible. Actualisez les donnees en premier.");
+                if (createModal) {
+                    createModal.show();
+                }
+                return;
+            }
+            openCreateParticipantModal();
         });
     }
 

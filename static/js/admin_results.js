@@ -284,6 +284,10 @@
         judges.forEach(function (judge) {
             const card = document.createElement("div");
             card.className = "card border-0 border-bottom rounded-0";
+            const submittedInfo = judge.submitted && judge.submitted_at ? '<div class="text-muted small">Soumis</div>' : '';
+            const unlockButton = judge.submitted
+                ? '<button class="btn btn-outline-danger btn-sm mt-2" type="button" data-action="reset-submission" data-judge-id="' + judge.id + '">Debloquer</button>'
+                : '';
             card.innerHTML = [
                 '<div class="card-body py-3">',
                 '  <div class="d-flex justify-content-between align-items-start gap-3">',
@@ -293,7 +297,8 @@
                 '    </div>',
                 '    <div class="text-end">',
                 formatStatusBadge(judge.status || "en_attente"),
-                judge.submitted && judge.submitted_at ? '<div class="text-muted small">Soumis</div>' : '',
+                submittedInfo,
+                unlockButton,
                 '    </div>',
                 '  </div>',
                 '</div>',
@@ -336,6 +341,52 @@
         } finally {
             setLoading(false);
         }
+    }
+
+    if (judgesContainer) {
+        judgesContainer.addEventListener("click", function (event) {
+            const trigger = event.target.closest("[data-action=\"reset-submission\"]");
+            if (!trigger) {
+                return;
+            }
+            event.preventDefault();
+            if (!state.selectedGalaId) {
+                return;
+            }
+            const judgeId = Number(trigger.getAttribute("data-judge-id"));
+            if (!Number.isFinite(judgeId)) {
+                return;
+            }
+            const button = trigger;
+            button.disabled = true;
+            fetch("/admin/api/galas/" + state.selectedGalaId + "/judges/" + judgeId + "/submission", {
+                method: "DELETE",
+            })
+                .then(function (response) {
+                    return response.json().then(function (data) {
+                        return { ok: response.ok, data: data };
+                    }).catch(function () {
+                        return { ok: response.ok, data: null };
+                    });
+                })
+                .then(function (result) {
+                    if (!result.ok) {
+                        const message = result.data && result.data.message ? result.data.message : "Impossible de reinitialiser la soumission.";
+                        throw new Error(message);
+                    }
+                    fetchResults();
+                })
+                .catch(function (error) {
+                    console.error("admin_results reset submission error", error);
+                    if (errorState) {
+                        errorState.textContent = error.message || "Impossible de reinitialiser la soumission.";
+                        errorState.classList.remove("d-none");
+                    }
+                })
+                .finally(function () {
+                    button.disabled = false;
+                });
+        });
     }
 
     galaSelect.addEventListener("change", function () {

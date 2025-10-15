@@ -753,6 +753,57 @@ def unlock_gala(gala_id: int):
 
 
 
+@admin_bp.route("/api/galas/<int:gala_id>/judges/<int:juge_id>/submission", methods=["DELETE"])
+def reset_judge_submission(gala_id: int, juge_id: int):
+
+    conn = get_db_connection()
+
+    try:
+        gala_row = conn.execute(
+            "SELECT id FROM gala WHERE id = ?",
+            (gala_id,),
+        ).fetchone()
+        if not gala_row:
+            return jsonify({"status": "error", "message": "Gala introuvable."}), 404
+
+        juge_row = conn.execute(
+            "SELECT id FROM juge WHERE id = ?",
+            (juge_id,),
+        ).fetchone()
+        if not juge_row:
+            return jsonify({"status": "error", "message": "Juge introuvable."}), 404
+
+        assignment_row = conn.execute(
+            """
+            SELECT 1
+            FROM juge_gala_categorie AS jgc
+            JOIN gala_categorie AS gc ON gc.id = jgc.gala_categorie_id
+            WHERE jgc.juge_id = ? AND gc.gala_id = ?
+            LIMIT 1
+            """,
+            (juge_id, gala_id),
+        ).fetchone()
+        if not assignment_row:
+            return jsonify({"status": "error", "message": "Ce juge n'est pas assigne a ce gala."}), 400
+
+        submission_row = conn.execute(
+            "SELECT 1 FROM juge_gala_submission WHERE juge_id = ? AND gala_id = ?",
+            (juge_id, gala_id),
+        ).fetchone()
+        if not submission_row:
+            return jsonify({"status": "ok", "message": "Aucune soumission a retirer."})
+
+        conn.execute(
+            "DELETE FROM juge_gala_submission WHERE juge_id = ? AND gala_id = ?",
+            (juge_id, gala_id),
+        )
+        conn.commit()
+        return jsonify({"status": "ok"})
+    finally:
+        conn.close()
+
+
+
 
 @admin_bp.route("/api/galas/<int:gala_id>/categories", methods=["POST"])
 def add_categories_to_gala(gala_id: int):
@@ -1325,6 +1376,126 @@ def _fetch_responses_by_participant(conn, participant_ids: List[int]) -> Dict[in
 
 
 MAX_RESPONSE_LENGTH = 10000
+
+
+@admin_bp.route("/api/participants", methods=["POST"])
+def create_admin_participant():
+    payload = request.get_json(silent=True) or {}
+
+    gala_categorie_id = payload.get("gala_categorie_id")
+    compagnie_payload = payload.get("compagnie") or {}
+    compagnie_id = payload.get("compagnie_id")
+    segment_id = payload.get("segment_id")
+
+    try:
+        gala_categorie_id_int = int(gala_categorie_id)
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "Categorie invalide."}), 400
+
+    conn = get_db_connection()
+    try:
+        category_row = conn.execute(
+            """
+            SELECT gc.id, gc.gala_id, c.nom AS categorie_nom, g.nom AS gala_nom
+            FROM gala_categorie AS gc
+            JOIN categorie AS c ON c.id = gc.categorie_id
+            JOIN gala AS g ON g.id = gc.gala_id
+            WHERE gc.id = ?
+            """,
+            (gala_categorie_id_int,),
+        ).fetchone()
+        if not category_row:
+            return jsonify({"status": "error", "message": "Categorie introuvable."}), 404
+
+        segment_id_int: Optional[int] = None
+        if segment_id is not None:
+            try:
+                segment_id_int = int(segment_id)
+            except (TypeError, ValueError):
+                return jsonify({"status": "error", "message": "Segment invalide."}), 400
+            segment_row = conn.execute(
+                "SELECT id FROM segment WHERE id = ? AND gala_categorie_id = ?",
+                (segment_id_int, gala_categorie_id_int),
+            ).fetchone()
+            if not segment_row:
+                return jsonify({"status": "error", "message": "Segment incompatible avec la categorie."}), 400
+
+        compagnie_id_int: Optional[int] = None
+        if compagnie_id is not None:
+            try:
+                compagnie_id_int = int(compagnie_id)
+            except (TypeError, ValueError):
+                return jsonify({"status": "error", "message": "Compagnie invalide."}), 400
+            compagnie_row = conn.execute(
+                "SELECT id FROM compagnie WHERE id = ?",
+                (compagnie_id_int,),
+            ).fetchone()
+            if not compagnie_row:
+                return jsonify({"status": "error", "message": "Compagnie introuvable."}), 404
+        else:
+            compagnie_nom = (compagnie_payload.get("nom") or "").strip()
+            if not compagnie_nom:
+                return jsonify({"status": "error", "message": "Le nom de la compagnie est requis."}), 400
+
+            compagnie_fields = {
+                "secteur": (compagnie_payload.get("secteur") or "").strip() or None,
+                "ville": (compagnie_payload.get("ville") or "").strip() or None,
+                "courriel": (compagnie_payload.get("courriel") or "").strip() or None,
+                "telephone": (compagnie_payload.get("telephone") or "").strip() or None,
+                "responsable_nom": (compagnie_payload.get("responsable_nom") or "").strip() or None,
+                "responsable_titre": (compagnie_payload.get("responsable_titre") or "").strip() or None,
+                "site_web": (compagnie_payload.get("site_web") or "").strip() or None,
+            }
+
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO compagnie (nom, secteur, ville, courriel, telephone, responsable_nom, responsable_titre, site_web)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    compagnie_nom,
+                    compagnie_fields["secteur"],
+                    compagnie_fields["ville"],
+                    compagnie_fields["courriel"],
+                    compagnie_fields["telephone"],
+                    compagnie_fields["responsable_nom"],
+                    compagnie_fields["responsable_titre"],
+                    compagnie_fields["site_web"],
+                ),
+            )
+            compagnie_id_int = cursor.lastrowid
+
+        existing_participant = conn.execute(
+            """
+            SELECT 1
+            FROM participant
+            WHERE compagnie_id = ? AND gala_categorie_id = ?
+            """,
+            (compagnie_id_int, gala_categorie_id_int),
+        ).fetchone()
+        if existing_participant:
+            return jsonify({"status": "error", "message": "Ce participant est deja associe a cette categorie."}), 409
+
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO participant (compagnie_id, gala_categorie_id, segment_id)
+            VALUES (?, ?, ?)
+            """,
+            (compagnie_id_int, gala_categorie_id_int, segment_id_int),
+        )
+        participant_id = cursor.lastrowid
+        conn.commit()
+
+        return jsonify({
+            "status": "ok",
+            "participant_id": participant_id,
+            "compagnie_id": compagnie_id_int,
+            "gala_id": category_row["gala_id"],
+        }), 201
+    finally:
+        conn.close()
 
 
 @admin_bp.route("/api/participants", methods=["GET"])

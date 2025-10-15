@@ -713,3 +713,152 @@ def test_admin_can_update_participant_response(client):
     conn.close()
     assert row is not None
     assert row["contenu"] in (None, "")
+
+
+def test_admin_create_participant_with_new_company(client):
+    conn = db_module.get_db_connection()
+    roles = seed_roles(conn)
+    admin_id = create_user(conn, "Admin", "Chef", "adminchef", roles["admin"])
+
+    gala_id = conn.execute(
+        "INSERT INTO gala (nom, annee, lieu, date_gala) VALUES (?, ?, ?, ?)",
+        ("Gala Innovation", 2026, "Quebec", "2026-05-20"),
+    ).lastrowid
+    categorie_id = conn.execute(
+        "INSERT INTO categorie (nom, description) VALUES (?, ?)",
+        ("Innovation", ""),
+    ).lastrowid
+    gala_categorie_id = conn.execute(
+        "INSERT INTO gala_categorie (gala_id, categorie_id, ordre_affichage) VALUES (?, ?, ?)",
+        (gala_id, categorie_id, 1),
+    ).lastrowid
+    conn.commit()
+    conn.close()
+
+    admin_session(client, admin_id)
+
+    response = client.post(
+        "/admin/api/participants",
+        json={
+            "gala_categorie_id": gala_categorie_id,
+            "compagnie": {
+                "nom": "Nouvelle Compagnie",
+                "ville": "Sherbrooke",
+                "courriel": "info@nouvelle.ca",
+            },
+        },
+    )
+    assert response.status_code == 201
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    participant_id = payload["participant_id"]
+    compagnie_id = payload["compagnie_id"]
+
+    conn = db_module.get_db_connection()
+    participant_row = conn.execute(
+        "SELECT compagnie_id, gala_categorie_id FROM participant WHERE id = ?",
+        (participant_id,),
+    ).fetchone()
+    assert participant_row is not None
+    assert participant_row["gala_categorie_id"] == gala_categorie_id
+    assert participant_row["compagnie_id"] == compagnie_id
+    compagnie_row = conn.execute(
+        "SELECT nom, ville, courriel FROM compagnie WHERE id = ?",
+        (compagnie_id,),
+    ).fetchone()
+    conn.close()
+    assert compagnie_row is not None
+    assert compagnie_row["nom"] == "Nouvelle Compagnie"
+    assert compagnie_row["ville"] == "Sherbrooke"
+    assert compagnie_row["courriel"] == "info@nouvelle.ca"
+
+
+def test_admin_create_participant_conflict_on_existing_assignment(client):
+    conn = db_module.get_db_connection()
+    roles = seed_roles(conn)
+    admin_id = create_user(conn, "Admin", "Chef", "adminchef", roles["admin"])
+
+    gala_id = conn.execute(
+        "INSERT INTO gala (nom, annee, lieu, date_gala) VALUES (?, ?, ?, ?)",
+        ("Gala Croissance", 2026, "Montreal", "2026-06-10"),
+    ).lastrowid
+    categorie_id = conn.execute(
+        "INSERT INTO categorie (nom, description) VALUES (?, ?)",
+        ("Croissance", ""),
+    ).lastrowid
+    gala_categorie_id = conn.execute(
+        "INSERT INTO gala_categorie (gala_id, categorie_id, ordre_affichage) VALUES (?, ?, ?)",
+        (gala_id, categorie_id, 1),
+    ).lastrowid
+    compagnie_id = conn.execute(
+        "INSERT INTO compagnie (nom, ville) VALUES (?, ?)",
+        ("Compagnie Existant", "Quebec"),
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO participant (compagnie_id, gala_categorie_id, segment_id) VALUES (?, ?, ?)",
+        (compagnie_id, gala_categorie_id, None),
+    )
+    conn.commit()
+    conn.close()
+
+    admin_session(client, admin_id)
+
+    response = client.post(
+        "/admin/api/participants",
+        json={
+            "gala_categorie_id": gala_categorie_id,
+            "compagnie_id": compagnie_id,
+        },
+    )
+    assert response.status_code == 409
+    payload = response.get_json()
+    assert payload["status"] == "error"
+
+
+def test_admin_reset_judge_submission_removes_entry(client):
+    conn = db_module.get_db_connection()
+    roles = seed_roles(conn)
+    admin_id = create_user(conn, "Admin", "Chef", "adminchef", roles["admin"])
+    judge_user_id = create_user(conn, "Julie", "Juge", "juliejuge", roles["juge"])
+
+    gala_id = conn.execute(
+        "INSERT INTO gala (nom, annee, lieu, date_gala) VALUES (?, ?, ?, ?)",
+        ("Gala Distinction", 2026, "Quebec", "2026-05-15"),
+    ).lastrowid
+    categorie_id = conn.execute(
+        "INSERT INTO categorie (nom, description) VALUES (?, ?)",
+        ("Innovation", ""),
+    ).lastrowid
+    gala_categorie_id = conn.execute(
+        "INSERT INTO gala_categorie (gala_id, categorie_id, ordre_affichage) VALUES (?, ?, ?)",
+        (gala_id, categorie_id, 1),
+    ).lastrowid
+    juge_id = conn.execute(
+        "INSERT INTO juge (user_id) VALUES (?)",
+        (judge_user_id,),
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO juge_gala_categorie (juge_id, gala_categorie_id) VALUES (?, ?)",
+        (juge_id, gala_categorie_id),
+    )
+    conn.execute(
+        "INSERT INTO juge_gala_submission (juge_id, gala_id, submitted_at) VALUES (?, ?, ?)",
+        (juge_id, gala_id, "2026-05-10T10:00:00Z"),
+    )
+    conn.commit()
+    conn.close()
+
+    admin_session(client, admin_id)
+
+    response = client.delete(f"/admin/api/galas/{gala_id}/judges/{juge_id}/submission")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+
+    conn = db_module.get_db_connection()
+    submission_row = conn.execute(
+        "SELECT 1 FROM juge_gala_submission WHERE juge_id = ? AND gala_id = ?",
+        (juge_id, gala_id),
+    ).fetchone()
+    conn.close()
+    assert submission_row is None
